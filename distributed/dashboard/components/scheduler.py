@@ -1,52 +1,47 @@
+from collections import defaultdict
 import logging
 import math
+from numbers import Number
 import operator
 import os
-from collections import defaultdict
-from numbers import Number
 
-from bokeh.core.properties import without_property_validation
-from bokeh.io import curdoc
 from bokeh.layouts import column, row
 from bokeh.models import (
-    AdaptiveTicker,
-    Arrow,
-    BasicTicker,
-    BoxSelectTool,
-    BoxZoomTool,
-    CDSView,
-    ColorBar,
     ColumnDataSource,
+    ColorBar,
     DataRange1d,
-    GroupFilter,
     HoverTool,
-    NumberFormatter,
-    NumeralTickFormatter,
-    OpenURL,
-    Panel,
-    PanTool,
-    Range1d,
     ResetTool,
-    Tabs,
-    TapTool,
-    Title,
-    VeeHead,
+    PanTool,
     WheelZoomTool,
+    TapTool,
+    OpenURL,
+    Range1d,
     value,
+    NumeralTickFormatter,
+    BoxZoomTool,
+    AdaptiveTicker,
+    BasicTicker,
+    NumberFormatter,
+    BoxSelectTool,
+    GroupFilter,
+    CDSView,
+    Tabs,
+    Panel,
+    Title,
 )
 from bokeh.models.widgets import DataTable, TableColumn
-from bokeh.models.widgets.markups import Div
-from bokeh.palettes import Viridis11
 from bokeh.plotting import figure
+from bokeh.palettes import Viridis11
 from bokeh.themes import Theme
-from bokeh.transform import cumsum, factor_cmap, linear_cmap
-from tlz import curry, pipe
-from tlz.curried import concat, groupby, map
-from tornado import escape
-
+from bokeh.transform import factor_cmap, linear_cmap, cumsum
+from bokeh.io import curdoc
 import dask
 from dask import config
-from dask.utils import format_bytes, format_time, key_split, parse_timedelta
+from dask.utils import format_bytes, key_split
+from tlz import pipe
+from tlz.curried import map, concat, groupby
+from tornado import escape
 
 try:
     import numpy as np
@@ -56,18 +51,24 @@ except ImportError:
 from distributed.dashboard.components import add_periodic_callback
 from distributed.dashboard.components.shared import (
     DashboardComponent,
-    ProfileServer,
     ProfileTimePlot,
+    ProfileServer,
     SystemMonitor,
 )
-from distributed.dashboard.utils import BOKEH_VERSION, PROFILING, transpose, update
-from distributed.diagnostics.graph_layout import GraphLayout
+from distributed.dashboard.utils import (
+    transpose,
+    BOKEH_VERSION,
+    PROFILING,
+    without_property_validation,
+    update,
+)
+from distributed.metrics import time
+from distributed.utils import log_errors, format_time, parse_timedelta
 from distributed.diagnostics.progress_stream import color_of, progress_quads
+from distributed.diagnostics.graph_layout import GraphLayout
 from distributed.diagnostics.task_stream import TaskStreamPlugin
 from distributed.diagnostics.task_stream import color_of as ts_color_of
 from distributed.diagnostics.task_stream import colors as ts_color_lookup
-from distributed.metrics import time
-from distributed.utils import Log, log_errors
 
 if dask.config.get("distributed.dashboard.export-tool"):
     from distributed.dashboard.export_tool import ExportTool
@@ -86,18 +87,13 @@ env = Environment(
 
 BOKEH_THEME = Theme(os.path.join(os.path.dirname(__file__), "..", "theme.yaml"))
 TICKS_1024 = {"base": 1024, "mantissas": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]}
-XLABEL_ORIENTATION = -math.pi / 12  # slanted downwards 15 degrees
 
-
-logos_dict = {
-    "numpy": "statics/images/numpy.png",
-    "pandas": "statics/images/pandas.png",
-    "builtins": "statics/images/python.png",
-}
+nan = float("nan")
+inf = float("inf")
 
 
 class Occupancy(DashboardComponent):
-    """Occupancy (in time) per worker"""
+    """ Occupancy (in time) per worker """
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -114,35 +110,37 @@ class Occupancy(DashboardComponent):
                 }
             )
 
-            self.root = figure(
+            fig = figure(
                 title="Occupancy",
                 tools="",
                 id="bk-occupancy-plot",
                 x_axis_type="datetime",
                 **kwargs,
             )
-            rect = self.root.rect(
+            rect = fig.rect(
                 source=self.source, x="x", width="ms", y="y", height=1, color="color"
             )
             rect.nonselection_glyph = None
 
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.yaxis.visible = False
-            self.root.ygrid.visible = False
+            fig.xaxis.minor_tick_line_alpha = 0
+            fig.yaxis.visible = False
+            fig.ygrid.visible = False
             # fig.xaxis[0].formatter = NumeralTickFormatter(format='0.0s')
-            self.root.x_range.start = 0
+            fig.x_range.start = 0
 
             tap = TapTool(callback=OpenURL(url="./info/worker/@escaped_worker.html"))
 
             hover = HoverTool()
             hover.tooltips = "@worker : @occupancy s."
             hover.point_policy = "follow_mouse"
-            self.root.add_tools(hover, tap)
+            fig.add_tools(hover, tap)
+
+            self.root = fig
 
     @without_property_validation
     def update(self):
         with log_errors():
-            workers = self.scheduler.workers.values()
+            workers = list(self.scheduler.workers.values())
 
             y = list(range(len(workers)))
             occupancy = [ws.occupancy for ws in workers]
@@ -159,9 +157,9 @@ class Occupancy(DashboardComponent):
                     color.append("blue")
 
             if total:
-                self.root.title.text = (
-                    f"Occupancy -- total time: {format_time(total)} "
-                    f"wall time: {format_time(total / self.scheduler.total_nthreads)}"
+                self.root.title.text = "Occupancy -- total time: %s  wall time: %s" % (
+                    format_time(total),
+                    format_time(total / self.scheduler.total_nthreads),
                 )
             else:
                 self.root.title.text = "Occupancy"
@@ -181,7 +179,7 @@ class Occupancy(DashboardComponent):
 
 
 class ProcessingHistogram(DashboardComponent):
-    """How many tasks are on each worker"""
+    """ How many tasks are on each worker """
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -194,7 +192,7 @@ class ProcessingHistogram(DashboardComponent):
             self.root = figure(
                 title="Tasks Processing (Histogram)",
                 id="bk-nprocessing-histogram-plot",
-                name="processing",
+                name="processing_hist",
                 y_axis_label="frequency",
                 tools="",
                 **kwargs,
@@ -203,6 +201,7 @@ class ProcessingHistogram(DashboardComponent):
             self.root.xaxis.minor_tick_line_alpha = 0
             self.root.ygrid.visible = False
 
+            self.root.toolbar.logo = None
             self.root.toolbar_location = None
 
             self.root.quad(
@@ -222,291 +221,8 @@ class ProcessingHistogram(DashboardComponent):
         self.source.data.update({"left": x[:-1], "right": x[1:], "top": counts})
 
 
-def _memory_color(current: int, limit: int) -> str:
-    """Dynamic color used by WorkersMemory and ClusterMemory"""
-    if limit and current > limit:
-        return "red"
-    if limit and current > limit / 2:
-        return "orange"
-    return "blue"
-
-
-class ClusterMemory(DashboardComponent):
-    """Total memory usage on the cluster"""
-
-    def __init__(self, scheduler, width=600, **kwargs):
-        with log_errors():
-            self.scheduler = scheduler
-            self.source = ColumnDataSource(
-                {
-                    "width": [0] * 4,
-                    "x": [0] * 4,
-                    "y": [0] * 4,
-                    "color": ["blue", "blue", "blue", "grey"],
-                    "alpha": [1, 0.7, 0.4, 1],
-                    "proc_memory": [0] * 4,
-                    "managed": [0] * 4,
-                    "unmanaged_old": [0] * 4,
-                    "unmanaged_recent": [0] * 4,
-                    "spilled": [0] * 4,
-                }
-            )
-
-            self.root = figure(
-                title="Bytes stored on cluster",
-                tools="",
-                id="bk-cluster-memory-plot",
-                width=int(width / 2),
-                name="cluster_memory",
-                **kwargs,
-            )
-            rect = self.root.rect(
-                source=self.source,
-                x="x",
-                y="y",
-                width="width",
-                height=1,
-                color="color",
-                alpha="alpha",
-            )
-            rect.nonselection_glyph = None
-
-            self.root.axis[0].ticker = BasicTicker(**TICKS_1024)
-            self.root.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.x_range = Range1d(start=0)
-            self.root.yaxis.visible = False
-            self.root.ygrid.visible = False
-
-            self.root.toolbar_location = None
-            self.root.yaxis.visible = False
-
-            hover = HoverTool(
-                point_policy="follow_mouse",
-                tooltips="""
-                            <div>
-                                <span style="font-size: 12px; font-weight: bold;">Process memory (RSS):</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@proc_memory{0.00 b}</span>
-                            </div>
-                            <div style="margin-left: 1em;">
-                                <span style="font-size: 12px; font-weight: bold;">Managed:</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@managed{0.00 b}</span>
-                            </div>
-                            <div style="margin-left: 1em;">
-                                <span style="font-size: 12px; font-weight: bold;">Unmanaged (old):</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@unmanaged_old{0.00 b}</span>
-                            </div>
-                            <div style="margin-left: 1em;">
-                                <span style="font-size: 12px; font-weight: bold;">Unmanaged (recent):</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@unmanaged_recent{0.00 b}</span>
-                            </div>
-                            <div>
-                                <span style="font-size: 12px; font-weight: bold;">Spilled to disk:</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@spilled{0.00 b}</span>
-                            </div>
-                            """,
-            )
-            self.root.add_tools(hover)
-
-    @without_property_validation
-    def update(self):
-        with log_errors():
-            limit = sum(ws.memory_limit for ws in self.scheduler.workers.values())
-            meminfo = self.scheduler.memory
-            color = _memory_color(meminfo.process, limit)
-
-            width = [
-                meminfo.managed_in_memory,
-                meminfo.unmanaged_old,
-                meminfo.unmanaged_recent,
-                meminfo.managed_spilled,
-            ]
-
-            result = {
-                "width": width,
-                "x": [sum(width[:i]) + w / 2 for i, w in enumerate(width)],
-                "color": [color, color, color, "grey"],
-                "proc_memory": [meminfo.process] * 4,
-                "managed": [meminfo.managed_in_memory] * 4,
-                "unmanaged_old": [meminfo.unmanaged_old] * 4,
-                "unmanaged_recent": [meminfo.unmanaged_recent] * 4,
-                "spilled": [meminfo.managed_spilled] * 4,
-            }
-
-            x_end = max(limit, meminfo.process + meminfo.managed_spilled)
-            self.root.x_range.end = x_end
-
-            title = f"Bytes stored: {format_bytes(meminfo.process)}"
-            if meminfo.managed_spilled:
-                title += f" + {format_bytes(meminfo.managed_spilled)} spilled to disk"
-            self.root.title.text = title
-
-            update(self.source, result)
-
-
-class WorkersMemory(DashboardComponent):
-    """Memory usage for single workers"""
-
-    def __init__(self, scheduler, width=600, **kwargs):
-        with log_errors():
-            self.scheduler = scheduler
-            self.source = ColumnDataSource(
-                {
-                    "width": [],
-                    "x": [],
-                    "y": [],
-                    "color": [],
-                    "alpha": [],
-                    "worker": [],
-                    "escaped_worker": [],
-                    "proc_memory": [],
-                    "managed": [],
-                    "unmanaged_old": [],
-                    "unmanaged_recent": [],
-                    "spilled": [],
-                }
-            )
-
-            self.root = figure(
-                title="Bytes stored per worker",
-                tools="",
-                id="bk-workers-memory-plot",
-                width=int(width / 2),
-                name="workers_memory",
-                **kwargs,
-            )
-            rect = self.root.rect(
-                source=self.source,
-                x="x",
-                y="y",
-                width="width",
-                height=1,
-                color="color",
-                fill_alpha="alpha",
-                line_width=0,
-            )
-            rect.nonselection_glyph = None
-
-            self.root.axis[0].ticker = BasicTicker(**TICKS_1024)
-            self.root.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.x_range = Range1d(start=0)
-            self.root.yaxis.visible = False
-            self.root.ygrid.visible = False
-
-            tap = TapTool(callback=OpenURL(url="./info/worker/@escaped_worker.html"))
-            self.root.add_tools(tap)
-
-            self.root.toolbar_location = None
-            self.root.yaxis.visible = False
-
-            hover = HoverTool(
-                point_policy="follow_mouse",
-                tooltips="""
-                            <div>
-                                <span style="font-size: 12px; font-weight: bold;">Worker:</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@worker</span>
-                            </div>
-                            <div>
-                                <span style="font-size: 12px; font-weight: bold;">Process memory (RSS):</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@proc_memory{0.00 b}</span>
-                            </div>
-                            <div style="margin-left: 1em;">
-                                <span style="font-size: 12px; font-weight: bold;">Managed:</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@managed{0.00 b}</span>
-                            </div>
-                            <div style="margin-left: 1em;">
-                                <span style="font-size: 12px; font-weight: bold;">Unmanaged (old):</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@unmanaged_old{0.00 b}</span>
-                            </div>
-                            <div style="margin-left: 1em;">
-                                <span style="font-size: 12px; font-weight: bold;">Unmanaged (recent):</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@unmanaged_recent{0.00 b}</span>
-                            </div>
-                            <div>
-                                <span style="font-size: 12px; font-weight: bold;">Spilled to disk:</span>&nbsp;
-                                <span style="font-size: 10px; font-family: Monaco, monospace;">@spilled{0.00 b}</span>
-                            </div>
-                            """,
-            )
-            self.root.add_tools(hover)
-
-    @without_property_validation
-    def update(self):
-        def quadlist(i) -> list:
-            out = []
-            for ii in i:
-                out += [ii, ii, ii, ii]
-            return out
-
-        with log_errors():
-            workers = self.scheduler.workers.values()
-
-            width = []
-            x = []
-            color = []
-            max_limit = 0
-            procmemory = []
-            managed = []
-            spilled = []
-            unmanaged_old = []
-            unmanaged_recent = []
-
-            for ws in workers:
-                meminfo = ws.memory
-                limit = getattr(ws, "memory_limit", 0)
-                max_limit = max(
-                    max_limit, limit, meminfo.process + meminfo.managed_spilled
-                )
-                color_i = _memory_color(meminfo.process, limit)
-
-                width += [
-                    meminfo.managed_in_memory,
-                    meminfo.unmanaged_old,
-                    meminfo.unmanaged_recent,
-                    meminfo.managed_spilled,
-                ]
-                x += [sum(width[-4:i]) + width[i] / 2 for i in range(-4, 0)]
-                color += [color_i, color_i, color_i, "grey"]
-
-                # memory info
-                procmemory.append(meminfo.process)
-                managed.append(meminfo.managed_in_memory)
-                unmanaged_old.append(meminfo.unmanaged_old)
-                unmanaged_recent.append(meminfo.unmanaged_recent)
-                spilled.append(meminfo.managed_spilled)
-
-            result = {
-                "width": width,
-                "x": x,
-                "color": color,
-                "alpha": [1, 0.7, 0.4, 1] * len(workers),
-                "worker": quadlist(ws.address for ws in workers),
-                "escaped_worker": quadlist(
-                    escape.url_escape(ws.address) for ws in workers
-                ),
-                "y": quadlist(range(len(workers))),
-                "proc_memory": quadlist(procmemory),
-                "managed": quadlist(managed),
-                "unmanaged_old": quadlist(unmanaged_old),
-                "unmanaged_recent": quadlist(unmanaged_recent),
-                "spilled": quadlist(spilled),
-            }
-            # Remove rectangles with width=0
-            result = {
-                k: [vi for vi, w in zip(v, width) if w] for k, v in result.items()
-            }
-
-            self.root.x_range.end = max_limit
-            update(self.source, result)
-
-
-class WorkersMemoryHistogram(DashboardComponent):
-    """Histogram of memory usage, showing how many workers there are in each bucket of
-    usage. Replaces the per-worker graph when there are >= 50 workers.
-    """
+class NBytesHistogram(DashboardComponent):
+    """ How many tasks are on each worker """
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -517,9 +233,9 @@ class WorkersMemoryHistogram(DashboardComponent):
             )
 
             self.root = figure(
-                title="Bytes stored per worker (Histogram)",
-                name="workers_memory",
-                id="bk-workers-memory-histogram-plot",
+                title="Bytes Stored (Histogram)",
+                name="nbytes_hist",
+                id="bk-nbytes-histogram-plot",
                 y_axis_label="frequency",
                 tools="",
                 **kwargs,
@@ -527,11 +243,12 @@ class WorkersMemoryHistogram(DashboardComponent):
 
             self.root.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
             self.root.xaxis.ticker = AdaptiveTicker(**TICKS_1024)
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
+            self.root.xaxis.major_label_orientation = -math.pi / 12
 
             self.root.xaxis.minor_tick_line_alpha = 0
             self.root.ygrid.visible = False
 
+            self.root.toolbar.logo = None
             self.root.toolbar_location = None
 
             self.root.quad(
@@ -551,11 +268,13 @@ class WorkersMemoryHistogram(DashboardComponent):
         )
         counts, x = np.histogram(nbytes, bins=40)
         d = {"left": x[:-1], "right": x[1:], "top": counts}
-        update(self.source, d)
+        self.source.data.update(d)
+
+        self.root.title.text = "Bytes stored (Histogram): " + format_bytes(nbytes.sum())
 
 
 class BandwidthTypes(DashboardComponent):
-    """Bar chart showing bandwidth per type"""
+    """ Bar chart showing bandwidth per type """
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -570,7 +289,7 @@ class BandwidthTypes(DashboardComponent):
                 }
             )
 
-            self.root = figure(
+            fig = figure(
                 title="Bandwidth by Type",
                 tools="",
                 id="bk-bandwidth-type-plot",
@@ -578,8 +297,8 @@ class BandwidthTypes(DashboardComponent):
                 y_range=["a", "b"],
                 **kwargs,
             )
-            self.root.xaxis.major_label_orientation = -0.5
-            rect = self.root.rect(
+            fig.xaxis.major_label_orientation = -0.5
+            rect = fig.rect(
                 source=self.source,
                 x="bandwidth-half",
                 y="type",
@@ -587,40 +306,42 @@ class BandwidthTypes(DashboardComponent):
                 height=1,
                 color="blue",
             )
-            self.root.x_range.start = 0
-            self.root.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
-            self.root.xaxis.ticker = AdaptiveTicker(**TICKS_1024)
+            fig.x_range.start = 0
+            fig.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
+            fig.xaxis.ticker = AdaptiveTicker(**TICKS_1024)
             rect.nonselection_glyph = None
 
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.ygrid.visible = False
+            fig.xaxis.minor_tick_line_alpha = 0
+            fig.ygrid.visible = False
 
-            self.root.toolbar_location = None
+            fig.toolbar.logo = None
+            fig.toolbar_location = None
 
             hover = HoverTool()
             hover.tooltips = "@type: @bandwidth_text / s"
             hover.point_policy = "follow_mouse"
-            self.root.add_tools(hover)
+            fig.add_tools(hover)
+
+            self.fig = fig
 
     @without_property_validation
     def update(self):
         with log_errors():
             bw = self.scheduler.bandwidth_types
-            self.root.y_range.factors = list(sorted(bw))
+            self.fig.y_range.factors = list(sorted(bw))
             result = {
                 "bandwidth": list(bw.values()),
                 "bandwidth-half": [b / 2 for b in bw.values()],
                 "type": list(bw.keys()),
-                "bandwidth_text": [format_bytes(x) for x in bw.values()],
+                "bandwidth_text": list(map(format_bytes, bw.values())),
             }
-            self.root.title.text = "Bandwidth: " + format_bytes(
-                self.scheduler.bandwidth
-            )
+            self.fig.title.text = "Bandwidth: " + format_bytes(self.scheduler.bandwidth)
+
             update(self.source, result)
 
 
 class BandwidthWorkers(DashboardComponent):
-    """How many tasks are on each worker"""
+    """ How many tasks are on each worker """
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -643,7 +364,7 @@ class BandwidthWorkers(DashboardComponent):
                 high=1,
             )
 
-            self.root = figure(
+            fig = figure(
                 title="Bandwidth by Worker",
                 tools="",
                 id="bk-bandwidth-worker-plot",
@@ -652,8 +373,8 @@ class BandwidthWorkers(DashboardComponent):
                 y_range=["a", "b"],
                 **kwargs,
             )
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
-            self.root.rect(
+            fig.xaxis.major_label_orientation = -math.pi / 12
+            rect = fig.rect(
                 source=self.source,
                 x="source",
                 y="destination",
@@ -671,9 +392,10 @@ class BandwidthWorkers(DashboardComponent):
             )
             color_bar.formatter = NumeralTickFormatter(format="0.0 b")
             color_bar.ticker = AdaptiveTicker(**TICKS_1024)
-            self.root.add_layout(color_bar, "right")
+            fig.add_layout(color_bar, "right")
 
-            self.root.toolbar_location = None
+            fig.toolbar.logo = None
+            fig.toolbar_location = None
 
             hover = HoverTool()
             hover.tooltips = """
@@ -684,7 +406,9 @@ class BandwidthWorkers(DashboardComponent):
             </div>
             """
             hover.point_policy = "follow_mouse"
-            self.root.add_tools(hover)
+            fig.add_tools(hover)
+
+            self.fig = fig
 
     @without_property_validation
     def update(self):
@@ -700,15 +424,16 @@ class BandwidthWorkers(DashboardComponent):
                     return address
                 if ws.name is not None:
                     return str(ws.name)
-                return address
+                else:
+                    return address
 
             x, y, value = zip(*[(name(a), name(b), c) for (a, b), c in bw.items()])
 
             self.color_map.high = max(value)
 
             factors = list(sorted(set(x + y)))
-            self.root.x_range.factors = factors
-            self.root.y_range.factors = factors[::-1]
+            self.fig.x_range.factors = factors
+            self.fig.y_range.factors = factors[::-1]
 
             result = {
                 "source": x,
@@ -716,106 +441,13 @@ class BandwidthWorkers(DashboardComponent):
                 "bandwidth": value,
                 "bandwidth_text": list(map(format_bytes, value)),
             }
-            self.root.title.text = "Bandwidth: " + format_bytes(
-                self.scheduler.bandwidth
-            )
-            update(self.source, result)
-
-
-class WorkerNetworkBandwidth(DashboardComponent):
-    """Worker network bandwidth chart
-
-    Plots horizontal bars with the read_bytes and write_bytes worker state
-    """
-
-    def __init__(self, scheduler, **kwargs):
-        with log_errors():
-            self.scheduler = scheduler
-            self.source = ColumnDataSource(
-                {
-                    "y_read": [],
-                    "y_write": [],
-                    "x_read": [],
-                    "x_write": [],
-                }
-            )
-            self.root = figure(
-                title="Worker Network Bandwidth",
-                tools="",
-                id="bk-worker-net-bandwidth",
-                name="worker_network_bandwidth",
-                **kwargs,
-            )
-
-            # read_bytes
-            self.root.hbar(
-                y="y_read",
-                right="x_read",
-                line_color=None,
-                left=0,
-                height=0.5,
-                fill_color="red",
-                legend_label="read",
-                source=self.source,
-            )
-
-            # write_bytes
-            self.root.hbar(
-                y="y_write",
-                right="x_write",
-                line_color=None,
-                left=0,
-                height=0.5,
-                fill_color="blue",
-                legend_label="write",
-                source=self.source,
-            )
-
-            self.root.axis[0].ticker = BasicTicker(**TICKS_1024)
-            self.root.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.x_range = Range1d(start=0)
-            self.root.yaxis.visible = False
-            self.root.ygrid.visible = False
-            self.root.toolbar_location = None
-            self.root.yaxis.visible = False
-
-    @without_property_validation
-    def update(self):
-        with log_errors():
-            workers = self.scheduler.workers.values()
-
-            h = 0.1
-            y_read = [i + 0.75 + i * h for i in range(len(workers))]
-            y_write = [i + 0.25 + i * h for i in range(len(workers))]
-
-            x_read = []
-            x_write = []
-
-            for ws in workers:
-                x_read.append(ws.metrics["read_bytes"])
-                x_write.append(ws.metrics["write_bytes"])
-
-            self.root.x_range.end = max(
-                max(x_read),
-                max(x_write),
-                100_000_000,
-                0.95 * self.root.x_range.end,
-            )
-
-            result = {
-                "y_read": y_read,
-                "y_write": y_write,
-                "x_read": x_read,
-                "x_write": x_write,
-            }
+            self.fig.title.text = "Bandwidth: " + format_bytes(self.scheduler.bandwidth)
 
             update(self.source, result)
 
 
 class ComputePerKey(DashboardComponent):
-    """Bar chart showing time spend in action by key prefix"""
+    """ Bar chart showing time spend in action by key prefix"""
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -861,12 +493,13 @@ class ComputePerKey(DashboardComponent):
             fig.yaxis.axis_label = "Time (s)"
             fig.yaxis[0].formatter = NumeralTickFormatter(format="0")
             fig.yaxis.ticker = AdaptiveTicker(**TICKS_1024)
-            fig.xaxis.major_label_orientation = XLABEL_ORIENTATION
+            fig.xaxis.major_label_orientation = -math.pi / 12
             rect.nonselection_glyph = None
 
             fig.xaxis.minor_tick_line_alpha = 0
             fig.xgrid.visible = False
 
+            fig.toolbar.logo = None
             fig.toolbar_location = None
 
             hover = HoverTool()
@@ -890,6 +523,14 @@ class ComputePerKey(DashboardComponent):
             self.fig = fig
             tab1 = Panel(child=fig, title="Bar Chart")
 
+            compute_wedge_data = {
+                "times": [0.2, 0.1],
+                "formatted_time": ["0.2 ms", "2.8 us"],
+                "angles": [1.4, 0.8],
+                "color": [ts_color_lookup["transfer"], ts_color_lookup["compute"]],
+                "names": ["sum", "sum_partial"],
+            }
+
             fig2 = figure(
                 title="Compute Time Per Task",
                 tools="",
@@ -899,7 +540,7 @@ class ComputePerKey(DashboardComponent):
                 **kwargs,
             )
 
-            fig2.wedge(
+            wedge = fig2.wedge(
                 x=0,
                 y=1,
                 radius=0.4,
@@ -934,7 +575,7 @@ class ComputePerKey(DashboardComponent):
             self.wedge_fig = fig2
             tab2 = Panel(child=fig2, title="Pie Chart")
 
-            self.root = Tabs(tabs=[tab1, tab2])
+            self.tabs = Tabs(tabs=[tab1, tab2])
 
     @without_property_validation
     def update(self):
@@ -982,7 +623,7 @@ class ComputePerKey(DashboardComponent):
 
 
 class AggregateAction(DashboardComponent):
-    """Bar chart showing time spend in action by key prefix"""
+    """ Bar chart showing time spend in action by key prefix"""
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -1004,7 +645,7 @@ class AggregateAction(DashboardComponent):
 
             self.action_source = ColumnDataSource(data=action_data)
 
-            self.root = figure(
+            fig = figure(
                 title="Aggregate Per Action",
                 tools="",
                 id="bk-aggregate-per-action-plot",
@@ -1013,7 +654,7 @@ class AggregateAction(DashboardComponent):
                 **kwargs,
             )
 
-            rect = self.root.vbar(
+            rect = fig.vbar(
                 source=self.action_source,
                 x="names",
                 top="times",
@@ -1021,20 +662,21 @@ class AggregateAction(DashboardComponent):
                 color="color",
             )
 
-            self.root.y_range.start = 0
-            self.root.min_border_right = 20
-            self.root.min_border_bottom = 60
-            self.root.yaxis[0].formatter = NumeralTickFormatter(format="0")
-            self.root.yaxis.axis_label = "Time (s)"
-            self.root.yaxis.ticker = AdaptiveTicker(**TICKS_1024)
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
-            self.root.xaxis.major_label_text_font_size = "16px"
+            fig.y_range.start = 0
+            fig.min_border_right = 20
+            fig.min_border_bottom = 60
+            fig.yaxis[0].formatter = NumeralTickFormatter(format="0")
+            fig.yaxis.axis_label = "Time (s)"
+            fig.yaxis.ticker = AdaptiveTicker(**TICKS_1024)
+            fig.xaxis.major_label_orientation = -math.pi / 12
+            fig.xaxis.major_label_text_font_size = "16px"
             rect.nonselection_glyph = None
 
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.xgrid.visible = False
+            fig.xaxis.minor_tick_line_alpha = 0
+            fig.xgrid.visible = False
 
-            self.root.toolbar_location = None
+            fig.toolbar.logo = None
+            fig.toolbar_location = None
 
             hover = HoverTool()
             hover.tooltips = """
@@ -1044,7 +686,9 @@ class AggregateAction(DashboardComponent):
             </div>
             """
             hover.point_policy = "follow_mouse"
-            self.root.add_tools(hover)
+            fig.add_tools(hover)
+
+            self.fig = fig
 
     @without_property_validation
     def update(self):
@@ -1069,8 +713,8 @@ class AggregateAction(DashboardComponent):
                     agg_colors.append(ts_color_lookup[action])
                 agg_time.append(t)
 
-            self.root.x_range.factors = agg_names
-            self.root.title.text = "Aggregate Time Per Action"
+            self.fig.x_range.factors = agg_names
+            self.fig.title.text = "Aggregate Time Per Action"
 
             action_result = dict(
                 times=agg_time,
@@ -1083,7 +727,7 @@ class AggregateAction(DashboardComponent):
 
 
 class MemoryByKey(DashboardComponent):
-    """Bar chart showing memory use by key prefix"""
+    """ Bar chart showing memory use by key prefix"""
 
     def __init__(self, scheduler, **kwargs):
         with log_errors():
@@ -1098,7 +742,7 @@ class MemoryByKey(DashboardComponent):
                 }
             )
 
-            self.root = figure(
+            fig = figure(
                 title="Memory Use",
                 tools="",
                 id="bk-memory-by-key-plot",
@@ -1106,18 +750,19 @@ class MemoryByKey(DashboardComponent):
                 x_range=["a", "b"],
                 **kwargs,
             )
-            rect = self.root.vbar(
+            rect = fig.vbar(
                 source=self.source, x="name", top="nbytes", width=0.9, color="color"
             )
-            self.root.yaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
-            self.root.yaxis.ticker = AdaptiveTicker(**TICKS_1024)
-            self.root.xaxis.major_label_orientation = XLABEL_ORIENTATION
+            fig.yaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
+            fig.yaxis.ticker = AdaptiveTicker(**TICKS_1024)
+            fig.xaxis.major_label_orientation = -math.pi / 12
             rect.nonselection_glyph = None
 
-            self.root.xaxis.minor_tick_line_alpha = 0
-            self.root.ygrid.visible = False
+            fig.xaxis.minor_tick_line_alpha = 0
+            fig.ygrid.visible = False
 
-            self.root.toolbar_location = None
+            fig.toolbar.logo = None
+            fig.toolbar_location = None
 
             hover = HoverTool()
             hover.tooltips = "@name: @nbytes_text"
@@ -1129,7 +774,9 @@ class MemoryByKey(DashboardComponent):
             </div>
             """
             hover.point_policy = "follow_mouse"
-            self.root.add_tools(hover)
+            fig.add_tools(hover)
+
+            self.fig = fig
 
     @without_property_validation
     def update(self):
@@ -1143,7 +790,7 @@ class MemoryByKey(DashboardComponent):
                     nbytes[ks] += ts.nbytes
 
             names = list(sorted(counts))
-            self.root.x_range.factors = names
+            self.fig.x_range.factors = names
             result = {
                 "name": names,
                 "count": [counts[name] for name in names],
@@ -1151,13 +798,13 @@ class MemoryByKey(DashboardComponent):
                 "nbytes_text": [format_bytes(nbytes[name]) for name in names],
                 "color": [color_of(name) for name in names],
             }
-            self.root.title.text = "Total Use: " + format_bytes(sum(nbytes.values()))
+            self.fig.title.text = "Total Use: " + format_bytes(sum(nbytes.values()))
 
             update(self.source, result)
 
 
 class CurrentLoad(DashboardComponent):
-    """Tasks and CPU usage on each worker"""
+    """ How many tasks are on each worker """
 
     def __init__(self, scheduler, width=600, **kwargs):
         with log_errors():
@@ -1165,21 +812,26 @@ class CurrentLoad(DashboardComponent):
             self.scheduler = scheduler
             self.source = ColumnDataSource(
                 {
-                    "nprocessing": [],
-                    "nprocessing-half": [],
-                    "nprocessing-color": [],
-                    "cpu": [],
-                    "cpu-half": [],
-                    "y": [],
-                    "worker": [],
-                    "escaped_worker": [],
+                    "nprocessing": [1, 2],
+                    "nprocessing-half": [0.5, 1],
+                    "nprocessing-color": ["red", "blue"],
+                    "nbytes": [1, 2],
+                    "nbytes-half": [0.5, 1],
+                    "nbytes_text": ["1B", "2B"],
+                    "cpu": [1, 2],
+                    "cpu-half": [0.5, 1],
+                    "worker": ["a", "b"],
+                    "y": [1, 2],
+                    "nbytes-color": ["blue", "blue"],
+                    "escaped_worker": ["a", "b"],
                 }
             )
+
             processing = figure(
                 title="Tasks Processing",
                 tools="",
                 id="bk-nprocessing-plot",
-                name="processing",
+                name="processing_hist",
                 width=int(width / 2),
                 **kwargs,
             )
@@ -1194,13 +846,31 @@ class CurrentLoad(DashboardComponent):
             processing.x_range.start = 0
             rect.nonselection_glyph = None
 
+            nbytes = figure(
+                title="Bytes stored",
+                tools="",
+                id="bk-nbytes-worker-plot",
+                width=int(width / 2),
+                name="nbytes_hist",
+                **kwargs,
+            )
+            rect = nbytes.rect(
+                source=self.source,
+                x="nbytes-half",
+                y="y",
+                width="nbytes",
+                height=1,
+                color="nbytes-color",
+            )
+            rect.nonselection_glyph = None
+
             cpu = figure(
                 title="CPU Utilization",
                 tools="",
                 id="bk-cpu-worker-plot",
                 width=int(width / 2),
                 name="cpu_hist",
-                x_range=(0, 100),
+                x_range=(0, None),
                 **kwargs,
             )
             rect = cpu.rect(
@@ -1213,7 +883,12 @@ class CurrentLoad(DashboardComponent):
             )
             rect.nonselection_glyph = None
 
-            for fig in (processing, cpu):
+            nbytes.axis[0].ticker = BasicTicker(**TICKS_1024)
+            nbytes.xaxis[0].formatter = NumeralTickFormatter(format="0.0 b")
+            nbytes.xaxis.major_label_orientation = -math.pi / 12
+            nbytes.x_range.start = 0
+
+            for fig in [processing, nbytes, cpu]:
                 fig.xaxis.minor_tick_line_alpha = 0
                 fig.yaxis.visible = False
                 fig.ygrid.visible = False
@@ -1223,6 +898,7 @@ class CurrentLoad(DashboardComponent):
                 )
                 fig.add_tools(tap)
 
+                fig.toolbar.logo = None
                 fig.toolbar_location = None
                 fig.yaxis.visible = False
 
@@ -1232,81 +908,121 @@ class CurrentLoad(DashboardComponent):
             processing.add_tools(hover)
 
             hover = HoverTool()
+            hover.tooltips = "@worker : @nbytes_text"
+            hover.point_policy = "follow_mouse"
+            nbytes.add_tools(hover)
+
+            hover = HoverTool()
             hover.tooltips = "@worker : @cpu %"
             hover.point_policy = "follow_mouse"
             cpu.add_tools(hover)
 
             self.processing_figure = processing
+            self.nbytes_figure = nbytes
             self.cpu_figure = cpu
+
+            processing.y_range = nbytes.y_range
+            cpu.y_range = nbytes.y_range
 
     @without_property_validation
     def update(self):
         with log_errors():
-            workers = self.scheduler.workers.values()
-            now = time()
-            if not any(ws.processing for ws in workers) and now < self.last + 1:
-                return
-            self.last = now
+            workers = list(self.scheduler.workers.values())
+
+            y = list(range(len(workers)))
 
             cpu = [int(ws.metrics["cpu"]) for ws in workers]
-            nprocessing = [len(ws.processing) for ws in workers]
 
-            nprocessing_color = []
+            nprocessing = [len(ws.processing) for ws in workers]
+            processing_color = []
             for ws in workers:
                 if ws in self.scheduler.idle:
-                    nprocessing_color.append("red")
+                    processing_color.append("red")
                 elif ws in self.scheduler.saturated:
-                    nprocessing_color.append("green")
+                    processing_color.append("green")
                 else:
-                    nprocessing_color.append("blue")
+                    processing_color.append("blue")
 
-            result = {
-                "cpu": cpu,
-                "cpu-half": [c / 2 for c in cpu],
-                "nprocessing": nprocessing,
-                "nprocessing-half": [np / 2 for np in nprocessing],
-                "nprocessing-color": nprocessing_color,
-                "worker": [ws.address for ws in workers],
-                "escaped_worker": [escape.url_escape(ws.address) for ws in workers],
-                "y": list(range(len(workers))),
-            }
+            nbytes = [ws.metrics["memory"] for ws in workers]
+            nbytes_text = [format_bytes(nb) for nb in nbytes]
+            nbytes_color = []
+            max_limit = 0
+            for ws, nb in zip(workers, nbytes):
+                limit = (
+                    getattr(self.scheduler.workers[ws.address], "memory_limit", inf)
+                    or inf
+                )
 
-            if self.scheduler.workers:
-                xrange = max(ws.nthreads or 1 for ws in workers)
-            else:
-                xrange = 1
-            self.cpu_figure.x_range.end = xrange * 100
+                if limit > max_limit and limit != inf:
+                    max_limit = limit
 
-            update(self.source, result)
+                if nb > limit:
+                    nbytes_color.append("red")
+                elif nb > limit / 2:
+                    nbytes_color.append("orange")
+                else:
+                    nbytes_color.append("blue")
+
+            now = time()
+            if any(nprocessing) or self.last + 1 < now:
+                self.last = now
+                result = {
+                    "cpu": cpu,
+                    "cpu-half": [c / 2 for c in cpu],
+                    "nprocessing": nprocessing,
+                    "nprocessing-half": [np / 2 for np in nprocessing],
+                    "nprocessing-color": processing_color,
+                    "nbytes": nbytes,
+                    "nbytes-half": [nb / 2 for nb in nbytes],
+                    "nbytes-color": nbytes_color,
+                    "nbytes_text": nbytes_text,
+                    "worker": [ws.address for ws in workers],
+                    "escaped_worker": [escape.url_escape(ws.address) for ws in workers],
+                    "y": y,
+                }
+
+                self.nbytes_figure.title.text = "Bytes stored: " + format_bytes(
+                    sum(nbytes)
+                )
+                self.nbytes_figure.x_range.end = max_limit
+                if self.scheduler.workers:
+                    self.cpu_figure.x_range.end = (
+                        max(ws.nthreads or 1 for ws in self.scheduler.workers.values())
+                        * 100
+                    )
+                else:
+                    self.cpu_figure.x_range.end = 100
+
+                update(self.source, result)
 
 
 class StealingTimeSeries(DashboardComponent):
     def __init__(self, scheduler, **kwargs):
         self.scheduler = scheduler
         self.source = ColumnDataSource(
-            {
-                "time": [time() * 1000, time() * 1000 + 1],
-                "idle": [0, 0],
-                "saturated": [0, 0],
-            }
+            {"time": [time(), time() + 1], "idle": [0, 0.1], "saturated": [0, 0.1]}
         )
 
         x_range = DataRange1d(follow="end", follow_interval=20000, range_padding=0)
 
-        self.root = figure(
+        fig = figure(
             title="Idle and Saturated Workers Over Time",
             x_axis_type="datetime",
+            y_range=[-0.1, len(scheduler.workers) + 0.1],
+            height=150,
             tools="",
             x_range=x_range,
             **kwargs,
         )
-        self.root.line(source=self.source, x="time", y="idle", color="red")
-        self.root.line(source=self.source, x="time", y="saturated", color="green")
-        self.root.yaxis.minor_tick_line_color = None
+        fig.line(source=self.source, x="time", y="idle", color="red")
+        fig.line(source=self.source, x="time", y="saturated", color="green")
+        fig.yaxis.minor_tick_line_color = None
 
-        self.root.add_tools(
+        fig.add_tools(
             ResetTool(), PanTool(dimensions="width"), WheelZoomTool(dimensions="width")
         )
+
+        self.root = fig
 
     @without_property_validation
     def update(self):
@@ -1343,37 +1059,41 @@ class StealingEvents(DashboardComponent):
 
         x_range = DataRange1d(follow="end", follow_interval=20000, range_padding=0)
 
-        self.root = figure(
+        fig = figure(
             title="Stealing Events",
             x_axis_type="datetime",
+            y_axis_type="log",
+            height=250,
             tools="",
             x_range=x_range,
             **kwargs,
         )
 
-        self.root.circle(
+        fig.circle(
             source=self.source,
             x="time",
-            y="level",
+            y="cost_factor",
             color="color",
             size="radius",
             alpha=0.5,
         )
-        self.root.yaxis.axis_label = "Level"
+        fig.yaxis.axis_label = "Cost Multiplier"
 
         hover = HoverTool()
         hover.tooltips = "Level: @level, Duration: @duration, Count: @count, Cost factor: @cost_factor"
         hover.point_policy = "follow_mouse"
 
-        self.root.add_tools(
+        fig.add_tools(
             hover,
             ResetTool(),
             PanTool(dimensions="width"),
             WheelZoomTool(dimensions="width"),
         )
 
+        self.root = fig
+
     def convert(self, msgs):
-        """Convert a log message to a glyph"""
+        """ Convert a log message to a glyph """
         total_duration = 0
         for msg in msgs:
             time, level, key, duration, sat, occ_sat, idl, occ_idl = msg
@@ -1393,7 +1113,7 @@ class StealingEvents(DashboardComponent):
             "color": color,
             "duration": total_duration,
             "radius": radius,
-            "cost_factor": self.steal.cost_multipliers[level],
+            "cost_factor": min(10, self.steal.cost_multipliers[level]),
         }
 
         return d
@@ -1402,11 +1122,9 @@ class StealingEvents(DashboardComponent):
     def update(self):
         with log_errors():
             log = self.scheduler.get_events(topic="stealing")
-            current = len(self.scheduler.events["stealing"])
-            n = current - self.last
-
+            n = self.steal.count - self.last
             log = [log[-i][1] for i in range(1, n + 1) if isinstance(log[-i][1], list)]
-            self.last = current
+            self.last = self.steal.count
 
             if log:
                 new = pipe(
@@ -1438,7 +1156,7 @@ class Events(DashboardComponent):
 
         x_range = DataRange1d(follow="end", follow_interval=200000)
 
-        self.root = figure(
+        fig = figure(
             title=name,
             x_axis_type="datetime",
             height=height,
@@ -1447,7 +1165,7 @@ class Events(DashboardComponent):
             **kwargs,
         )
 
-        self.root.circle(
+        fig.circle(
             source=self.source,
             x="time",
             y="y",
@@ -1456,19 +1174,21 @@ class Events(DashboardComponent):
             alpha=0.5,
             **{"legend_field" if BOKEH_VERSION >= "1.4" else "legend": "action"},
         )
-        self.root.yaxis.axis_label = "Action"
-        self.root.legend.location = "top_left"
+        fig.yaxis.axis_label = "Action"
+        fig.legend.location = "top_left"
 
         hover = HoverTool()
         hover.tooltips = "@action<br>@hover"
         hover.point_policy = "follow_mouse"
 
-        self.root.add_tools(
+        fig.add_tools(
             hover,
             ResetTool(),
             PanTool(dimensions="width"),
             WheelZoomTool(dimensions="width"),
         )
+
+        self.root = fig
 
     @without_property_validation
     def update(self):
@@ -1863,456 +1583,8 @@ class TaskGraph(DashboardComponent):
         self.scheduler.remove_plugin(self.layout)
 
 
-class TaskGroupGraph(DashboardComponent):
-    """
-    Task Group Graph
-
-    Creates a graph layout for TaskGroups on the scheduler.  It assigns
-    (x, y) locations to all the TaskGroups and lays them out by according
-    to their dependencies. The layout gets updated every time that new
-    TaskGroups are added.
-
-    Each task group node incodes information about task progress, memory,
-    and output type into glyphs, as well as a hover tooltip with more detailed
-    information on name, computation time, memory, and tasks status.
-    """
-
-    def __init__(self, scheduler, **kwargs):
-        self.scheduler = scheduler
-
-        self.nodes_layout = {}
-        self.arrows_layout = {}
-
-        self.old_counter = -1
-
-        self.nodes_source = ColumnDataSource(
-            {
-                "x": [],
-                "y": [],
-                "w_box": [],
-                "h_box": [],
-                "name": [],
-                "tot_tasks": [],
-                "color": [],
-                "x_start": [],
-                "x_end": [],
-                "y_start": [],
-                "y_end": [],
-                "x_end_progress": [],
-                "mem_alpha": [],
-                "node_line_width": [],
-                "comp_tasks": [],
-                "url_logo": [],
-                "x_logo": [],
-                "y_logo": [],
-                "w_logo": [],
-                "h_logo": [],
-                "in_processing": [],
-                "in_memory": [],
-                "in_released": [],
-                "in_erred": [],
-                "compute_time": [],
-                "memory": [],
-            }
-        )
-
-        self.arrows_source = ColumnDataSource({"xs": [], "ys": [], "xe": [], "ye": []})
-
-        self.root = figure(title="Task Groups Graph", match_aspect=True, **kwargs)
-        self.root.axis.visible = False
-        self.subtitle = Title(text=" ", text_font_style="italic")
-        self.root.add_layout(self.subtitle, "above")
-
-        rect = self.root.rect(
-            x="x",
-            y="y",
-            width="w_box",
-            height="h_box",
-            color="color",
-            fill_alpha="mem_alpha",
-            line_color="black",
-            line_width="node_line_width",
-            source=self.nodes_source,
-        )
-
-        ####plot tg log
-        self.root.image_url(
-            url="url_logo",
-            x="x_logo",
-            y="y_logo",
-            w="w_logo",
-            h="h_logo",
-            anchor="center",
-            source=self.nodes_source,
-        )
-
-        # progress bar plain box
-        self.root.quad(
-            left="x_start",
-            right="x_end",
-            bottom="y_start",
-            top="y_end",
-            color=None,
-            line_color="black",
-            source=self.nodes_source,
-        )
-
-        # progress bar
-        self.root.quad(
-            left="x_start",
-            right="x_end_progress",
-            bottom="y_start",
-            top="y_end",
-            color="color",
-            line_color=None,
-            fill_alpha=0.6,
-            source=self.nodes_source,
-        )
-
-        self.arrows = Arrow(
-            end=VeeHead(size=8),
-            line_color="black",
-            line_alpha=0.5,
-            line_width=1,
-            x_start="xs",
-            y_start="ys",
-            x_end="xe",
-            y_end="ye",
-            source=self.arrows_source,
-        )
-        self.root.add_layout(self.arrows)
-
-        self.root.xgrid.grid_line_color = None
-        self.root.ygrid.grid_line_color = None
-        self.root.x_range.range_padding = 0.5
-        self.root.y_range.range_padding = 0.5
-
-        hover = HoverTool(
-            point_policy="follow_mouse",
-            tooltips="""
-                <div>
-                    <span style="font-size: 12px; font-weight: bold;">Name:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@name</span>
-                </div>
-                <div>
-                    <span style="font-size: 12px; font-weight: bold;">Compute time:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@compute_time</span>
-                </div>
-                <div>
-                    <span style="font-size: 12px; font-weight: bold;">Memory:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@memory</span>
-                </div>
-                <div>
-                    <span style="font-size: 12px; font-weight: bold;">Tasks:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@tot_tasks</span>
-                </div>
-                <div style="margin-left: 2em;">
-                    <span style="font-size: 12px; font-weight: bold;">Completed:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@comp_tasks</span>
-                </div>
-                <div style="margin-left: 2em;">
-                    <span style="font-size: 12px; font-weight: bold;">Processing:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@in_processing</span>
-                </div>
-                <div style="margin-left: 2em;">
-                    <span style="font-size: 12px; font-weight: bold;">In memory:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@in_memory</span>
-                </div>
-                <div style="margin-left: 2em;">
-                    <span style="font-size: 12px; font-weight: bold;">Erred:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@in_erred</span>
-                </div>
-                <div style="margin-left: 2em;">
-                    <span style="font-size: 12px; font-weight: bold;">Released:</span>&nbsp;
-                    <span style="font-size: 10px; font-family: Monaco, monospace;">@in_released</span>
-                </div>
-                """,
-            renderers=[rect],
-        )
-
-        self.root.add_tools(hover)
-
-    @without_property_validation
-    def update_layout(self):
-
-        with log_errors():
-            # get dependecies per task group
-            # in some cases there are tg that have themeselves as dependencies, we remove those.
-            dependencies = {
-                k: {ds.name for ds in ts.dependencies if ds.name != k}
-                for k, ts in self.scheduler.task_groups.items()
-            }
-
-            import dask
-
-            order = dask.order.order(
-                dsk={group.name: 1 for k, group in self.scheduler.task_groups.items()},
-                dependencies=dependencies,
-            )
-
-            ordered = sorted(self.scheduler.task_groups, key=order.get)
-
-            xs = {}
-            ys = {}
-            locations = set()
-            nodes_layout = {}
-            arrows_layout = {}
-            for tg in ordered:
-                if dependencies[tg]:
-                    x = max(xs[dep] for dep in dependencies[tg]) + 1
-                    y = max(ys[dep] for dep in dependencies[tg])
-                    if (
-                        len(dependencies[tg]) > 1
-                        and len({ys[dep] for dep in dependencies[tg]}) == 1
-                    ):
-                        y += 1
-                else:
-                    x = 0
-                    y = max(ys.values()) + 1 if ys else 0
-
-                while (x, y) in locations:  # avoid collisions by moving up
-                    y += 1
-
-                locations.add((x, y))
-
-                xs[tg], ys[tg] = x, y
-
-                # info neded for node layout to coulmn data source
-                nodes_layout[tg] = {"x": xs[tg], "y": ys[tg]}
-
-                # info needed for arrow layout
-                arrows_layout[tg] = {
-                    "nstart": dependencies[tg],
-                    "nend": [tg] * len(dependencies[tg]),
-                }
-
-            return nodes_layout, arrows_layout
-
-    def compute_size(self, x, min_box, max_box):
-        start = 0.4
-        end = 0.8
-
-        y = (end - start) / (max_box - min_box) * (x - min_box) + start
-
-        return y
-
-    @without_property_validation
-    def update(self):
-
-        if self.scheduler.transition_counter == self.old_counter:
-            return
-        self.old_counter = self.scheduler.transition_counter
-
-        if not self.scheduler.task_groups:
-            self.subtitle.text = "Scheduler is empty."
-        else:
-            self.subtitle.text = " "
-
-        if self.nodes_layout.keys() != self.scheduler.task_groups.keys():
-            self.nodes_layout, self.arrows_layout = self.update_layout()
-
-        nodes_data = {
-            "x": [],
-            "y": [],
-            "w_box": [],
-            "h_box": [],
-            "name": [],
-            "color": [],
-            "tot_tasks": [],
-            "x_start": [],
-            "x_end": [],
-            "y_start": [],
-            "y_end": [],
-            "x_end_progress": [],
-            "mem_alpha": [],
-            "node_line_width": [],
-            "comp_tasks": [],
-            "url_logo": [],
-            "x_logo": [],
-            "y_logo": [],
-            "w_logo": [],
-            "h_logo": [],
-            "in_processing": [],
-            "in_memory": [],
-            "in_released": [],
-            "in_erred": [],
-            "compute_time": [],
-            "memory": [],
-        }
-
-        arrows_data = {
-            "xs": [],
-            "ys": [],
-            "xe": [],
-            "ye": [],
-        }
-
-        durations = set()
-        nbytes = set()
-        for key, tg in self.scheduler.task_groups.items():
-
-            if tg.duration and tg.nbytes_total:
-                durations.add(tg.duration)
-                nbytes.add(tg.nbytes_total)
-
-        durations_min = min(durations, default=0)
-        durations_max = max(durations, default=0)
-        nbytes_min = min(nbytes, default=0)
-        nbytes_max = max(nbytes, default=0)
-
-        box_dim = {}
-        for key, tg in self.scheduler.task_groups.items():
-
-            comp_tasks = (
-                tg.states["released"] + tg.states["memory"] + tg.states["erred"]
-            )
-            tot_tasks = sum(tg.states.values())
-
-            # compute width and height of boxes
-            if (
-                tg.duration
-                and tg.nbytes_total
-                and comp_tasks
-                and len(durations) > 1
-                and len(nbytes) > 1
-            ):
-
-                # scale duration (width)
-                width_box = self.compute_size(
-                    tg.duration / comp_tasks * tot_tasks,
-                    min_box=durations_min / comp_tasks * tot_tasks,
-                    max_box=durations_max / comp_tasks * tot_tasks,
-                )
-
-                # need to scale memory (height)
-                height_box = self.compute_size(
-                    tg.nbytes_total / comp_tasks * tot_tasks,
-                    min_box=nbytes_min / comp_tasks * tot_tasks,
-                    max_box=nbytes_max / comp_tasks * tot_tasks,
-                )
-
-            else:
-                width_box = 0.6
-                height_box = width_box / 2
-
-            box_dim[key] = {"width": width_box, "height": height_box}
-
-        for key, tg in self.scheduler.task_groups.items():
-            x = self.nodes_layout[key]["x"]
-            y = self.nodes_layout[key]["y"]
-            width = box_dim[key]["width"]
-            height = box_dim[key]["height"]
-
-            # main boxes layout
-            nodes_data["x"].append(x)
-            nodes_data["y"].append(y)
-            nodes_data["w_box"].append(width)
-            nodes_data["h_box"].append(height)
-
-            comp_tasks = (
-                tg.states["released"] + tg.states["memory"] + tg.states["erred"]
-            )
-            tot_tasks = sum(tg.states.values())
-
-            nodes_data["name"].append(tg.prefix.name)
-
-            nodes_data["color"].append(color_of(tg.prefix.name))
-            nodes_data["tot_tasks"].append(tot_tasks)
-
-            # memory alpha factor by 0.4 if not get's too dark
-            nodes_data["mem_alpha"].append(
-                (tg.states["memory"] / sum(tg.states.values())) * 0.4
-            )
-
-            # main box line width
-            if tg.states["processing"]:
-                nodes_data["node_line_width"].append(5)
-            else:
-                nodes_data["node_line_width"].append(1)
-
-            # progress bar data update
-            nodes_data["x_start"].append(x - width / 2)
-            nodes_data["x_end"].append(x + width / 2)
-
-            nodes_data["y_start"].append(y - height / 2)
-            nodes_data["y_end"].append(y - height / 2 + height * 0.4)
-
-            nodes_data["x_end_progress"].append(
-                x - width / 2 + width * comp_tasks / tot_tasks
-            )
-
-            # arrows
-            arrows_data["xs"] += [
-                self.nodes_layout[k]["x"] + box_dim[k]["width"] / 2
-                for k in self.arrows_layout[key]["nstart"]
-            ]
-            arrows_data["ys"] += [
-                self.nodes_layout[k]["y"] for k in self.arrows_layout[key]["nstart"]
-            ]
-            arrows_data["xe"] += [
-                self.nodes_layout[k]["x"] - box_dim[k]["width"] / 2
-                for k in self.arrows_layout[key]["nend"]
-            ]
-            arrows_data["ye"] += [
-                self.nodes_layout[k]["y"] for k in self.arrows_layout[key]["nend"]
-            ]
-
-            # LOGOS
-            if len(tg.types) == 1:
-                logo_type = next(iter(tg.types)).split(".")[0]
-                try:
-                    url_logo = logos_dict[logo_type]
-                except KeyError:
-                    url_logo = ""
-            else:
-                url_logo = ""
-
-            nodes_data["url_logo"].append(url_logo)
-
-            nodes_data["x_logo"].append(x + width / 3)
-            nodes_data["y_logo"].append(y + height / 3)
-
-            ratio = width / height
-
-            if ratio > 1:
-                nodes_data["h_logo"].append(height * 0.3)
-                nodes_data["w_logo"].append(width * 0.3 / ratio)
-            else:
-                nodes_data["h_logo"].append(height * 0.3 * ratio)
-                nodes_data["w_logo"].append(width * 0.3)
-
-            # compute_time and memory
-            nodes_data["compute_time"].append(format_time(tg.duration))
-            nodes_data["memory"].append(format_bytes(tg.nbytes_total))
-
-            # Add some status to hover
-            tasks_processing = tg.states["processing"]
-            tasks_memory = tg.states["memory"]
-            tasks_relased = tg.states["released"]
-            tasks_erred = tg.states["erred"]
-
-            nodes_data["comp_tasks"].append(
-                f"{comp_tasks} ({comp_tasks / tot_tasks * 100:.0f} %)"
-            )
-            nodes_data["in_processing"].append(
-                f"{tasks_processing} ({tasks_processing/ tot_tasks * 100:.0f} %)"
-            )
-            nodes_data["in_memory"].append(
-                f"{tasks_memory} ({tasks_memory/ tot_tasks * 100:.0f} %)"
-            )
-            nodes_data["in_released"].append(
-                f"{tasks_relased} ({tasks_relased/ tot_tasks * 100:.0f} %)"
-            )
-            nodes_data["in_erred"].append(
-                f"{ tasks_erred} ({tasks_erred/ tot_tasks * 100:.0f} %)"
-            )
-
-        self.nodes_source.data.update(nodes_data)
-        self.arrows_source.data.update(arrows_data)
-
-
 class TaskProgress(DashboardComponent):
-    """Progress bars per task type"""
+    """ Progress bars per task type """
 
     def __init__(self, scheduler, **kwargs):
         self.scheduler = scheduler
@@ -2494,14 +1766,7 @@ class WorkerTable(DashboardComponent):
     plot laying out hosts by their current memory use.
     """
 
-    excluded_names = {
-        "executing",
-        "in_flight",
-        "in_memory",
-        "ready",
-        "time",
-        "spilled_nbytes",
-    }
+    excluded_names = {"executing", "in_flight", "in_memory", "ready", "time"}
 
     def __init__(self, scheduler, width=800, **kwargs):
         self.scheduler = scheduler
@@ -2513,10 +1778,6 @@ class WorkerTable(DashboardComponent):
             "memory",
             "memory_limit",
             "memory_percent",
-            "memory_managed",
-            "memory_unmanaged_old",
-            "memory_unmanaged_recent",
-            "memory_spilled",
             "num_fds",
             "read_bytes",
             "write_bytes",
@@ -2541,47 +1802,33 @@ class WorkerTable(DashboardComponent):
             "memory",
             "memory_limit",
             "memory_percent",
-            "memory_managed",
-            "memory_unmanaged_old",
-            "memory_unmanaged_recent",
-            "memory_spilled",
             "num_fds",
             "read_bytes",
             "write_bytes",
         ]
-        column_title_renames = {
-            "memory_limit": "limit",
-            "memory_percent": "memory %",
-            "memory_managed": "managed",
-            "memory_unmanaged_old": "unmanaged old",
-            "memory_unmanaged_recent": "unmanaged recent",
-            "memory_spilled": "spilled",
-            "num_fds": "# fds",
-            "read_bytes": "read",
-            "write_bytes": "write",
-        }
 
         self.source = ColumnDataSource({k: [] for k in self.names})
 
         columns = {
-            name: TableColumn(field=name, title=column_title_renames.get(name, name))
+            name: TableColumn(field=name, title=name.replace("_percent", " %"))
             for name in table_names
         }
 
         formatters = {
-            "cpu": NumberFormatter(format="0 %"),
+            "cpu": NumberFormatter(format="0.0 %"),
             "memory_percent": NumberFormatter(format="0.0 %"),
-            "memory": NumberFormatter(format="0.0 b"),
-            "memory_limit": NumberFormatter(format="0.0 b"),
-            "memory_managed": NumberFormatter(format="0.0 b"),
-            "memory_unmanaged_old": NumberFormatter(format="0.0 b"),
-            "memory_unmanaged_recent": NumberFormatter(format="0.0 b"),
-            "memory_spilled": NumberFormatter(format="0.0 b"),
+            "memory": NumberFormatter(format="0 b"),
+            "memory_limit": NumberFormatter(format="0 b"),
             "read_bytes": NumberFormatter(format="0 b"),
             "write_bytes": NumberFormatter(format="0 b"),
             "num_fds": NumberFormatter(format="0"),
             "nthreads": NumberFormatter(format="0"),
         }
+
+        if BOKEH_VERSION < "0.12.15":
+            dt_kwargs = {"row_headers": False}
+        else:
+            dt_kwargs = {"index_position": None}
 
         table = DataTable(
             source=self.source,
@@ -2589,7 +1836,7 @@ class WorkerTable(DashboardComponent):
             reorderable=True,
             sortable=True,
             width=width,
-            index_position=None,
+            **dt_kwargs,
         )
 
         for name in table_names:
@@ -2598,7 +1845,7 @@ class WorkerTable(DashboardComponent):
 
         extra_names = ["name", "address"] + self.extra_names
         extra_columns = {
-            name: TableColumn(field=name, title=column_title_renames.get(name, name))
+            name: TableColumn(field=name, title=name.replace("_percent", "%"))
             for name in extra_names
         }
 
@@ -2608,7 +1855,7 @@ class WorkerTable(DashboardComponent):
             reorderable=True,
             sortable=True,
             width=width,
-            index_position=None,
+            **dt_kwargs,
         )
 
         hover = HoverTool(
@@ -2616,7 +1863,7 @@ class WorkerTable(DashboardComponent):
             tooltips="""
                 <div>
                   <span style="font-size: 10px; font-family: Monaco, monospace;">Worker (@name): </span>
-                  <span style="font-size: 10px; font-family: Monaco, monospace;">@memory_percent{0.0 %}</span>
+                  <span style="font-size: 10px; font-family: Monaco, monospace;">@memory_percent</span>
                 </div>
                 """,
         )
@@ -2645,7 +1892,7 @@ class WorkerTable(DashboardComponent):
             tooltips="""
                 <div>
                   <span style="font-size: 10px; font-family: Monaco, monospace;">Worker (@name): </span>
-                  <span style="font-size: 10px; font-family: Monaco, monospace;">@cpu_fraction{0 %}</span>
+                  <span style="font-size: 10px; font-family: Monaco, monospace;">@cpu_fraction</span>
                 </div>
                 """,
         )
@@ -2687,8 +1934,6 @@ class WorkerTable(DashboardComponent):
         for i, (addr, ws) in enumerate(
             sorted(self.scheduler.workers.items(), key=lambda kv: str(kv[1].name))
         ):
-            minfo = ws.memory
-
             for name in self.names + self.extra_names:
                 data[name].append(ws.metrics.get(name, None))
             data["name"][-1] = ws.name if ws.name is not None else i
@@ -2698,18 +1943,15 @@ class WorkerTable(DashboardComponent):
             else:
                 data["memory_percent"][-1] = ""
             data["memory_limit"][-1] = ws.memory_limit
-            data["memory_managed"][-1] = minfo.managed_in_memory
-            data["memory_unmanaged_old"][-1] = minfo.unmanaged_old
-            data["memory_unmanaged_recent"][-1] = minfo.unmanaged_recent
-            data["memory_unmanaged_recent"][-1] = minfo.unmanaged_recent
-            data["memory_spilled"][-1] = minfo.managed_spilled
             data["cpu"][-1] = ws.metrics["cpu"] / 100.0
             data["cpu_fraction"][-1] = ws.metrics["cpu"] / 100.0 / ws.nthreads
             data["nthreads"][-1] = ws.nthreads
 
         for name in self.names + self.extra_names:
             if name == "name":
-                data[name].insert(0, f"Total ({len(data[name])})")
+                data[name].insert(
+                    0, "Total ({nworkers})".format(nworkers=len(data[name]))
+                )
                 continue
             try:
                 if len(self.scheduler.workers) == 0:
@@ -2751,15 +1993,6 @@ class WorkerTable(DashboardComponent):
         self.source.data.update(data)
 
 
-class SchedulerLogs:
-    def __init__(self, scheduler):
-        logs = Log(
-            "\n".join(line for level, line in scheduler.get_logs())
-        )._repr_html_()
-
-        self.root = Div(text=logs)
-
-
 def systemmonitor_doc(scheduler, extra, doc):
     with log_errors():
         sysmon = SystemMonitor(scheduler, sizing_mode="stretch_both")
@@ -2774,9 +2007,9 @@ def systemmonitor_doc(scheduler, extra, doc):
 
 def stealing_doc(scheduler, extra, doc):
     with log_errors():
-        occupancy = Occupancy(scheduler)
-        stealing_ts = StealingTimeSeries(scheduler)
-        stealing_events = StealingEvents(scheduler)
+        occupancy = Occupancy(scheduler, height=200, sizing_mode="scale_width")
+        stealing_ts = StealingTimeSeries(scheduler, sizing_mode="scale_width")
+        stealing_events = StealingEvents(scheduler, sizing_mode="scale_width")
         stealing_events.root.x_range = stealing_ts.root.x_range
         doc.title = "Dask: Work Stealing"
         add_periodic_callback(doc, occupancy, 500)
@@ -2784,13 +2017,11 @@ def stealing_doc(scheduler, extra, doc):
         add_periodic_callback(doc, stealing_events, 500)
 
         doc.add_root(
-            row(
+            column(
                 occupancy.root,
-                column(
-                    stealing_ts.root,
-                    stealing_events.root,
-                    sizing_mode="stretch_both",
-                ),
+                stealing_ts.root,
+                stealing_events.root,
+                sizing_mode="scale_width",
             )
         )
 
@@ -2855,63 +2086,8 @@ def graph_doc(scheduler, extra, doc):
         doc.theme = BOKEH_THEME
 
 
-def tg_graph_doc(scheduler, extra, doc):
-    with log_errors():
-        tg_graph = TaskGroupGraph(scheduler, sizing_mode="stretch_both")
-        doc.title = "Dask: Task Groups Graph"
-        tg_graph.update()
-        add_periodic_callback(doc, tg_graph, 200)
-        doc.add_root(tg_graph.root)
-        doc.template = env.get_template("simple.html")
-        doc.template_variables.update(extra)
-        doc.theme = BOKEH_THEME
-
-
 def status_doc(scheduler, extra, doc):
     with log_errors():
-        cluster_memory = ClusterMemory(scheduler, sizing_mode="stretch_both")
-        cluster_memory.update()
-        add_periodic_callback(doc, cluster_memory, 100)
-        doc.add_root(cluster_memory.root)
-
-        if len(scheduler.workers) < 50:
-            workers_memory = WorkersMemory(scheduler, sizing_mode="stretch_both")
-            processing = CurrentLoad(scheduler, sizing_mode="stretch_both")
-
-            processing_root = processing.processing_figure
-        else:
-            workers_memory = WorkersMemoryHistogram(
-                scheduler, sizing_mode="stretch_both"
-            )
-            processing = ProcessingHistogram(scheduler, sizing_mode="stretch_both")
-
-            processing_root = processing.root
-
-        current_load = CurrentLoad(scheduler, sizing_mode="stretch_both")
-        occupancy = Occupancy(scheduler, sizing_mode="stretch_both")
-
-        cpu_root = current_load.cpu_figure
-        occupancy_root = occupancy.root
-
-        workers_memory.update()
-        processing.update()
-        current_load.update()
-        occupancy.update()
-
-        add_periodic_callback(doc, workers_memory, 100)
-        add_periodic_callback(doc, processing, 100)
-        add_periodic_callback(doc, current_load, 100)
-        add_periodic_callback(doc, occupancy, 100)
-
-        doc.add_root(workers_memory.root)
-
-        tab1 = Panel(child=processing_root, title="Processing")
-        tab2 = Panel(child=cpu_root, title="CPU")
-        tab3 = Panel(child=occupancy_root, title="Occupancy")
-
-        proc_tabs = Tabs(tabs=[tab1, tab2, tab3], name="processing_tabs")
-        doc.add_root(proc_tabs)
-
         task_stream = TaskStream(
             scheduler,
             n_rectangles=dask.config.get(
@@ -2922,26 +2098,89 @@ def status_doc(scheduler, extra, doc):
         )
         task_stream.update()
         add_periodic_callback(doc, task_stream, 100)
-        doc.add_root(task_stream.root)
 
         task_progress = TaskProgress(scheduler, sizing_mode="stretch_both")
         task_progress.update()
         add_periodic_callback(doc, task_progress, 100)
-        doc.add_root(task_progress.root)
+
+        if len(scheduler.workers) < 50:
+            current_load = CurrentLoad(scheduler, sizing_mode="stretch_both")
+            current_load.update()
+            add_periodic_callback(doc, current_load, 100)
+            doc.add_root(current_load.nbytes_figure)
+            doc.add_root(current_load.processing_figure)
+        else:
+            nbytes_hist = NBytesHistogram(scheduler, sizing_mode="stretch_both")
+            nbytes_hist.update()
+            processing_hist = ProcessingHistogram(scheduler, sizing_mode="stretch_both")
+            processing_hist.update()
+            add_periodic_callback(doc, nbytes_hist, 100)
+            add_periodic_callback(doc, processing_hist, 100)
+            current_load_fig = row(
+                nbytes_hist.root, processing_hist.root, sizing_mode="stretch_both"
+            )
+
+            doc.add_root(nbytes_hist.root)
+            doc.add_root(processing_hist.root)
 
         doc.title = "Dask: Status"
+        doc.add_root(task_progress.root)
+        doc.add_root(task_stream.root)
         doc.theme = BOKEH_THEME
         doc.template = env.get_template("status.html")
         doc.template_variables.update(extra)
+        doc.theme = BOKEH_THEME
 
 
-@curry
-def individual_doc(cls, interval, scheduler, extra, doc, fig_attr="root", **kwargs):
+def individual_task_stream_doc(scheduler, extra, doc):
+    task_stream = TaskStream(
+        scheduler, n_rectangles=1000, clear_interval="10s", sizing_mode="stretch_both"
+    )
+    task_stream.update()
+    add_periodic_callback(doc, task_stream, 100)
+    doc.add_root(task_stream.root)
+    doc.theme = BOKEH_THEME
+
+
+def individual_nbytes_doc(scheduler, extra, doc):
+    current_load = CurrentLoad(scheduler, sizing_mode="stretch_both")
+    current_load.update()
+    add_periodic_callback(doc, current_load, 100)
+    doc.add_root(current_load.nbytes_figure)
+    doc.theme = BOKEH_THEME
+
+
+def individual_cpu_doc(scheduler, extra, doc):
+    current_load = CurrentLoad(scheduler, sizing_mode="stretch_both")
+    current_load.update()
+    add_periodic_callback(doc, current_load, 100)
+    doc.add_root(current_load.cpu_figure)
+    doc.theme = BOKEH_THEME
+
+
+def individual_nprocessing_doc(scheduler, extra, doc):
+    current_load = CurrentLoad(scheduler, sizing_mode="stretch_both")
+    current_load.update()
+    add_periodic_callback(doc, current_load, 100)
+    doc.add_root(current_load.processing_figure)
+    doc.theme = BOKEH_THEME
+
+
+def individual_progress_doc(scheduler, extra, doc):
+    task_progress = TaskProgress(scheduler, height=160, sizing_mode="stretch_both")
+    task_progress.update()
+    add_periodic_callback(doc, task_progress, 100)
+    doc.add_root(task_progress.root)
+    doc.theme = BOKEH_THEME
+
+
+def individual_graph_doc(scheduler, extra, doc):
     with log_errors():
-        fig = cls(scheduler, sizing_mode="stretch_both", **kwargs)
-        fig.update()
-        add_periodic_callback(doc, fig, interval)
-        doc.add_root(getattr(fig, fig_attr))
+        graph = TaskGraph(scheduler, sizing_mode="stretch_both")
+        graph.update()
+
+        add_periodic_callback(doc, graph, 200)
+        doc.add_root(graph.root)
         doc.theme = BOKEH_THEME
 
 
@@ -2958,6 +2197,60 @@ def individual_profile_server_doc(scheduler, extra, doc):
         prof = ProfileServer(scheduler, sizing_mode="scale_width", doc=doc)
         doc.add_root(prof.root)
         prof.trigger_update()
+        doc.theme = BOKEH_THEME
+
+
+def individual_workers_doc(scheduler, extra, doc):
+    with log_errors():
+        table = WorkerTable(scheduler)
+        table.update()
+        add_periodic_callback(doc, table, 500)
+        doc.add_root(table.root)
+        doc.theme = BOKEH_THEME
+
+
+def individual_bandwidth_types_doc(scheduler, extra, doc):
+    with log_errors():
+        bw = BandwidthTypes(scheduler, sizing_mode="stretch_both")
+        bw.update()
+        add_periodic_callback(doc, bw, 500)
+        doc.add_root(bw.fig)
+        doc.theme = BOKEH_THEME
+
+
+def individual_bandwidth_workers_doc(scheduler, extra, doc):
+    with log_errors():
+        bw = BandwidthWorkers(scheduler, sizing_mode="stretch_both")
+        bw.update()
+        add_periodic_callback(doc, bw, 500)
+        doc.add_root(bw.fig)
+        doc.theme = BOKEH_THEME
+
+
+def individual_memory_by_key_doc(scheduler, extra, doc):
+    with log_errors():
+        component = MemoryByKey(scheduler, sizing_mode="stretch_both")
+        component.update()
+        add_periodic_callback(doc, component, 500)
+        doc.add_root(component.fig)
+        doc.theme = BOKEH_THEME
+
+
+def individual_compute_time_per_key_doc(scheduler, extra, doc):
+    with log_errors():
+        component = ComputePerKey(scheduler, sizing_mode="stretch_both")
+        component.update()
+        add_periodic_callback(doc, component, 500)
+        doc.add_root(component.tabs)
+        doc.theme = BOKEH_THEME
+
+
+def individual_aggregate_time_per_action_doc(scheduler, extra, doc):
+    with log_errors():
+        component = AggregateAction(scheduler, sizing_mode="stretch_both")
+        component.update()
+        add_periodic_callback(doc, component, 500)
+        doc.add_root(component.fig)
         doc.theme = BOKEH_THEME
 
 

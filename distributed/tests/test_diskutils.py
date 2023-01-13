@@ -11,8 +11,7 @@ from unittest import mock
 import pytest
 
 import dask
-
-from distributed.compatibility import MACOS
+from distributed.compatibility import WINDOWS
 from distributed.diskutils import WorkSpace
 from distributed.metrics import time
 from distributed.utils import mp_context
@@ -162,7 +161,7 @@ def test_workspace_rmtree_failure(tmpdir):
     # shutil.rmtree() may call its onerror callback several times
     assert lines
     for line in lines:
-        assert line.startswith(f"Failed to remove {a.dir_path!r}")
+        assert line.startswith("Failed to remove %r" % (a.dir_path,))
 
 
 def test_locking_disabled(tmpdir):
@@ -274,13 +273,15 @@ def _test_workspace_concurrency(tmpdir, timeout, max_procs):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(condition=MACOS, reason="extremely flaky")
 def test_workspace_concurrency(tmpdir):
+    if WINDOWS:
+        raise pytest.xfail.Exception("TODO: unknown failure on windows")
+    if sys.version_info < (3, 7):
+        raise pytest.xfail.Exception("TODO: unknown failure on Python 3.6")
     _test_workspace_concurrency(tmpdir, 5.0, 6)
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(condition=MACOS, reason="extremely flaky")
 def test_workspace_concurrency_intense(tmpdir):
     n_created, n_purged = _test_workspace_concurrency(tmpdir, 8.0, 16)
     assert n_created >= 100

@@ -1,10 +1,10 @@
-import warnings
 from contextlib import contextmanager
+import warnings
 
 import dask
-
-from .threadpoolexecutor import rejoin, secede
-from .worker import get_client, get_worker, thread_state
+from .threadpoolexecutor import secede, rejoin
+from .worker import thread_state, get_client, get_worker
+from .utils import parse_timedelta
 
 
 @contextmanager
@@ -17,10 +17,10 @@ def worker_client(timeout=None, separate_thread=True):
 
     Parameters
     ----------
-    timeout : Number or String
+    timeout: Number or String
         Timeout after which to error out. Defaults to the
         ``distributed.comm.timeouts.connect`` configuration value.
-    separate_thread : bool, optional
+    separate_thread: bool, optional
         Whether to run this function outside of the normal thread pool
         defaults to True
 
@@ -45,7 +45,7 @@ def worker_client(timeout=None, separate_thread=True):
     if timeout is None:
         timeout = dask.config.get("distributed.comm.timeouts.connect")
 
-    timeout = dask.utils.parse_timedelta(timeout, "s")
+    timeout = parse_timedelta(timeout, "s")
 
     worker = get_worker()
     client = get_client(timeout=timeout)

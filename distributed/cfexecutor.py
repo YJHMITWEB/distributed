@@ -2,12 +2,11 @@ import concurrent.futures as cf
 import weakref
 
 from tlz import merge
+
 from tornado import gen
 
-from dask.utils import parse_timedelta
-
 from .metrics import time
-from .utils import TimeoutError, sync
+from .utils import sync, TimeoutError
 
 
 @gen.coroutine
@@ -99,12 +98,12 @@ class ClientExecutor(cf.Executor):
 
         Parameters
         ----------
-        fn : A callable that will take as many arguments as there are
+        fn: A callable that will take as many arguments as there are
             passed iterables.
-        iterables : One iterable for each parameter to *fn*.
-        timeout : The maximum number of seconds to wait. If None, then there
+        iterables: One iterable for each parameter to *fn*.
+        timeout: The maximum number of seconds to wait. If None, then there
             is no limit on the wait time.
-        chunksize : ignored.
+        chunksize: ignored.
 
         Returns
         -------
@@ -119,7 +118,6 @@ class ClientExecutor(cf.Executor):
         """
         timeout = kwargs.pop("timeout", None)
         if timeout is not None:
-            timeout = parse_timedelta(timeout)
             end_time = timeout + time()
         if "chunksize" in kwargs:
             del kwargs["chunksize"]
@@ -157,7 +155,7 @@ class ClientExecutor(cf.Executor):
 
         Parameters
         ----------
-        wait : If True then shutdown will not return until all running
+        wait: If True then shutdown will not return until all running
             futures have finished executing.  If False then all running
             futures are cancelled immediately.
         """

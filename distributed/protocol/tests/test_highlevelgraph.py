@@ -1,13 +1,14 @@
 import ast
 
-import pytest
-
 import dask
+
 import dask.array as da
 import dask.dataframe as dd
 
-from distributed.diagnostics import SchedulerPlugin
 from distributed.utils_test import gen_cluster
+from distributed.diagnostics import SchedulerPlugin
+
+import pytest
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
@@ -90,7 +91,7 @@ async def test_shuffle(c, s, a, b):
     assert (res == 10.0).all()
 
 
-class ExampleAnnotationPlugin(SchedulerPlugin):
+class TestAnnotationPlugin(SchedulerPlugin):
     def __init__(self, priority_fn=None, qux="", resource="", retries=0):
         self.priority_fn = priority_fn or (lambda k: 0)
         self.qux = qux
@@ -133,7 +134,7 @@ async def test_array_annotations(c, s, a, b):
     qux = "baz"
     resource = "widget"
 
-    plugin = ExampleAnnotationPlugin(priority_fn=fn, qux=qux, resource=resource)
+    plugin = TestAnnotationPlugin(priority_fn=fn, qux=qux, resource=resource)
     s.add_plugin(plugin)
 
     assert plugin in s.plugins
@@ -158,7 +159,7 @@ async def test_array_annotations(c, s, a, b):
 @gen_cluster(client=True)
 async def test_dataframe_annotations(c, s, a, b):
     retries = 5
-    plugin = ExampleAnnotationPlugin(retries=retries)
+    plugin = TestAnnotationPlugin(retries=retries)
     s.add_plugin(plugin)
 
     assert plugin in s.plugins

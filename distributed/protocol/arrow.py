@@ -1,6 +1,6 @@
-import pyarrow
+from .serialize import dask_serialize, dask_deserialize
 
-from .serialize import dask_deserialize, dask_serialize
+import pyarrow
 
 if pyarrow.__version__ < "0.10":
     raise ImportError(

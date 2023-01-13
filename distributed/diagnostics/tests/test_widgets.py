@@ -71,19 +71,20 @@ def record_display(*args):
 # Distributed stuff #
 #####################
 
-import re
 from operator import add
+import re
 
 from tlz import valmap
 
 from distributed.client import wait
+from distributed.worker import dumps_task
+from distributed.utils_test import inc, dec, throws, gen_cluster, gen_tls_cluster
+from distributed.utils_test import client, loop, cluster_fixture  # noqa: F401
 from distributed.diagnostics.progressbar import (
-    MultiProgressWidget,
     ProgressWidget,
+    MultiProgressWidget,
     progress,
 )
-from distributed.utils_test import dec, gen_cluster, gen_tls_cluster, inc, throws
-from distributed.worker import dumps_task
 
 
 @gen_cluster(client=True)

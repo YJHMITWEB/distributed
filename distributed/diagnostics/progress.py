@@ -1,14 +1,14 @@
 import asyncio
-import logging
 from collections import defaultdict
+import logging
 from timeit import default_timer
 
 from tlz import groupby, valmap
 
 from dask.utils import stringify
-
-from ..utils import key_split, key_split_group, log_errors
 from .plugin import SchedulerPlugin
+from ..utils import key_split, key_split_group, log_errors
+
 
 logger = logging.getLogger(__name__)
 
@@ -229,15 +229,15 @@ def format_time(t):
     m, s = divmod(t, 60)
     h, m = divmod(m, 60)
     if h:
-        return f"{h:2.0f}hr {m:2.0f}min {s:4.1f}s"
+        return "{0:2.0f}hr {1:2.0f}min {2:4.1f}s".format(h, m, s)
     elif m:
-        return f"{m:2.0f}min {s:4.1f}s"
+        return "{0:2.0f}min {1:4.1f}s".format(m, s)
     else:
-        return f"{s:4.1f}s"
+        return "{0:4.1f}s".format(s)
 
 
 class AllProgress(SchedulerPlugin):
-    """Keep track of all keys, grouped by key_split"""
+    """ Keep track of all keys, grouped by key_split """
 
     def __init__(self, scheduler):
         self.all = defaultdict(set)
@@ -287,7 +287,7 @@ class AllProgress(SchedulerPlugin):
 
 
 class GroupProgress(SchedulerPlugin):
-    """Keep track of all keys, grouped by key_split"""
+    """ Keep track of all keys, grouped by key_split """
 
     def __init__(self, scheduler):
         self.scheduler = scheduler

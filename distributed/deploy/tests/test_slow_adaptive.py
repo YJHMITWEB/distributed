@@ -1,11 +1,9 @@
 import asyncio
-
 import pytest
 
-from dask.distributed import Client, Scheduler, SpecCluster, Worker
-
+from dask.distributed import Worker, Scheduler, SpecCluster, Client
+from distributed.utils_test import slowinc, cleanup  # noqa: F401
 from distributed.metrics import time
-from distributed.utils_test import slowinc
 
 
 class SlowWorker:

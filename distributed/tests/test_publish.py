@@ -1,17 +1,16 @@
 import asyncio
-
 import pytest
 
 from dask import delayed
-
 from distributed import Client
 from distributed.client import futures_of
 from distributed.metrics import time
-from distributed.protocol import Serialized
 from distributed.utils_test import gen_cluster, inc
+from distributed.utils_test import client, cluster_fixture, loop  # noqa F401
+from distributed.protocol import Serialized
 
 
-@gen_cluster()
+@gen_cluster(client=False)
 async def test_publish_simple(s, a, b):
     c = Client(s.address, asynchronous=True)
     f = Client(s.address, asynchronous=True)
@@ -37,7 +36,7 @@ async def test_publish_simple(s, a, b):
     await asyncio.gather(c.close(), f.close())
 
 
-@gen_cluster()
+@gen_cluster(client=False)
 async def test_publish_non_string_key(s, a, b):
     async with Client(s.address, asynchronous=True) as c:
         for name in [("a", "b"), 9.0, 8]:
@@ -52,7 +51,7 @@ async def test_publish_non_string_key(s, a, b):
             assert name in datasets
 
 
-@gen_cluster()
+@gen_cluster(client=False)
 async def test_publish_roundtrip(s, a, b):
     c = await Client(s.address, asynchronous=True)
     f = await Client(s.address, asynchronous=True)
@@ -147,7 +146,7 @@ def test_unpublish_multiple_datasets_sync(client):
     assert "y" in str(exc_info.value)
 
 
-@gen_cluster()
+@gen_cluster(client=False)
 async def test_publish_bag(s, a, b):
     db = pytest.importorskip("dask.bag")
     c = await Client(s.address, asynchronous=True)

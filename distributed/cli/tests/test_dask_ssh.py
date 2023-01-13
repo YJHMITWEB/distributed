@@ -1,5 +1,4 @@
 from click.testing import CliRunner
-
 from distributed.cli.dask_ssh import main
 
 

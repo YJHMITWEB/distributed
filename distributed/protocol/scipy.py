@@ -10,6 +10,7 @@ register_generic(scipy.sparse.spmatrix, "dask", dask_serialize, dask_deserialize
 
 @dask_serialize.register(scipy.sparse.dok.dok_matrix)
 def serialize_scipy_sparse_dok(x):
+    x_coo = x.tocoo()
     coo_header, coo_frames = dask_serialize(x.tocoo())
 
     header = {"coo_header": coo_header}

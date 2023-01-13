@@ -1,7 +1,7 @@
+from distributed.deploy.old_ssh import SSHCluster
 import click
 
 from distributed.cli.utils import check_python_3
-from distributed.deploy.old_ssh import SSHCluster
 
 
 @click.command(
@@ -175,10 +175,10 @@ def main(
             version=distributed.__version__
         )
     )
-    print(f"Worker nodes: {len(hostnames)}")
+    print("Worker nodes: {n}".format(n=len(hostnames)))
     for i, host in enumerate(hostnames):
-        print(f"  {i}: {host}")
-    print(f"\nscheduler node: {scheduler}:{scheduler_port}")
+        print("  {num}: {host}".format(num=i, host=host))
+    print("\nscheduler node: {addr}:{port}".format(addr=scheduler, port=scheduler_port))
     print("---------------------------------------------------------------\n\n")
 
     # Monitor the output of remote processes.  This blocks until the user issues a KeyboardInterrupt.

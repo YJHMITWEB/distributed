@@ -15,36 +15,31 @@ from tornado.httpclient import AsyncHTTPClient, HTTPRequest
 import dask
 from dask.core import flatten
 from dask.utils import stringify
-
+from distributed.utils import format_dashboard_link
 from distributed.client import wait
-from distributed.dashboard import scheduler
-from distributed.dashboard.components.scheduler import (
-    AggregateAction,
-    ClusterMemory,
-    ComputePerKey,
-    CurrentLoad,
-    Events,
-    MemoryByKey,
-    Occupancy,
-    ProcessingHistogram,
-    ProfileServer,
-    StealingEvents,
-    StealingTimeSeries,
-    SystemMonitor,
-    TaskGraph,
-    TaskGroupGraph,
-    TaskProgress,
-    TaskStream,
-    WorkerNetworkBandwidth,
-    WorkersMemory,
-    WorkersMemoryHistogram,
-    WorkerTable,
-)
+from distributed.metrics import time
+from distributed.utils_test import gen_cluster, inc, dec, slowinc, div, get_cert
 from distributed.dashboard.components.worker import Counters
 from distributed.dashboard.scheduler import applications
-from distributed.metrics import time
-from distributed.utils import format_dashboard_link
-from distributed.utils_test import dec, div, gen_cluster, get_cert, inc, slowinc
+from distributed.dashboard.components.scheduler import (
+    SystemMonitor,
+    Occupancy,
+    StealingTimeSeries,
+    StealingEvents,
+    Events,
+    TaskStream,
+    TaskProgress,
+    CurrentLoad,
+    ProcessingHistogram,
+    NBytesHistogram,
+    WorkerTable,
+    TaskGraph,
+    ProfileServer,
+    MemoryByKey,
+    AggregateAction,
+    ComputePerKey,
+)
+from distributed.dashboard import scheduler
 
 scheduler.PROFILING = False
 
@@ -93,8 +88,10 @@ async def test_counters(c, s, a, b):
     await asyncio.sleep(0.1)
     ss.update()
 
+    start = time()
     while not len(ss.digest_sources["tick-duration"][0].data["x"]):
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(1)
+        assert time() < start + 5
 
 
 @gen_cluster(client=True)
@@ -102,14 +99,15 @@ async def test_stealing_events(c, s, a, b):
     se = StealingEvents(s)
 
     futures = c.map(
-        slowinc, range(10), delay=0.1, workers=a.address, allow_other_workers=True
+        slowinc, range(100), delay=0.1, workers=a.address, allow_other_workers=True
     )
 
-    await wait(futures)
+    while not b.tasks:  # will steal soon
+        await asyncio.sleep(0.01)
+
     se.update()
+
     assert len(first(se.source.data.values()))
-    assert b.tasks
-    assert sum(se.source.data["count"]) >= len(b.tasks)
 
 
 @gen_cluster(client=True)
@@ -182,7 +180,7 @@ async def test_task_stream_clear_interval(c, s, a, b):
 
     await wait(c.map(inc, range(10)))
     ts.update()
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.010)
     await wait(c.map(dec, range(10)))
     ts.update()
 
@@ -190,7 +188,7 @@ async def test_task_stream_clear_interval(c, s, a, b):
     assert ts.source.data["name"].count("inc") == 10
     assert ts.source.data["name"].count("dec") == 10
 
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.300)
     await wait(c.map(inc, range(10, 20)))
     ts.update()
 
@@ -255,7 +253,9 @@ async def test_CurrentLoad(c, s, a, b):
     cl.update()
     d = dict(cl.source.data)
 
-    assert all(len(l) == 2 for l in d.values())
+    assert all(len(L) == 2 for L in d.values())
+    assert all(d["nbytes"])
+
     assert cl.cpu_figure.x_range.end == 200
 
 
@@ -274,43 +274,8 @@ async def test_ProcessingHistogram(c, s, a, b):
 
 
 @gen_cluster(client=True)
-async def test_WorkersMemory(c, s, a, b):
-    cl = WorkersMemory(s)
-
-    futures = c.map(slowinc, range(10), delay=0.001)
-    await wait(futures)
-
-    cl.update()
-    d = dict(cl.source.data)
-    llens = {len(l) for l in d.values()}
-    # There are 2 workers. There is definitely going to be managed_in_memory and
-    # unmanaged_old; there may be unmanaged_new. There won't be managed_spilled.
-    # Empty rects are removed.
-    assert llens in ({4}, {5}, {6})
-    assert all(d["width"])
-
-
-@gen_cluster(client=True)
-async def test_ClusterMemory(c, s, a, b):
-    cl = ClusterMemory(s)
-
-    futures = c.map(slowinc, range(10), delay=0.001)
-    await wait(futures)
-
-    cl.update()
-    d = dict(cl.source.data)
-    llens = {len(l) for l in d.values()}
-    # Unlike WorkersMemory, empty rects here aren't pruned away.
-    assert llens == {4}
-    # There is definitely going to be managed_in_memory and
-    # unmanaged_old; there may be unmanaged_new. There won't be managed_spilled.
-    assert any(d["width"])
-    assert not all(d["width"])
-
-
-@gen_cluster(client=True)
-async def test_WorkersMemoryHistogram(c, s, a, b):
-    nh = WorkersMemoryHistogram(s)
+async def test_NBytesHistogram(c, s, a, b):
+    nh = NBytesHistogram(s)
     nh.update()
     assert any(nh.source.data["top"] != 0)
 
@@ -478,37 +443,6 @@ async def test_WorkerTable_with_memory_limit_as_0(c, s, a, b):
 
 
 @gen_cluster(client=True)
-async def test_WorkerNetworkBandwidth(c, s, a, b):
-    nb = WorkerNetworkBandwidth(s)
-    nb.update()
-
-    assert all(len(v) == 2 for v in nb.source.data.values())
-
-    assert nb.source.data["y_read"] == [0.75, 1.85]
-    assert nb.source.data["y_write"] == [0.25, 1.35]
-
-
-@gen_cluster(client=True)
-async def test_WorkerNetworkBandwidth_metrics(c, s, a, b):
-    # Disable system monitor periodic callback to allow us to manually control
-    # when it is called below
-    a.periodic_callbacks["monitor"].stop()
-    b.periodic_callbacks["monitor"].stop()
-
-    # Update worker system monitors and send updated metrics to the scheduler
-    a.monitor.update()
-    b.monitor.update()
-    await asyncio.gather(a.heartbeat(), b.heartbeat())
-
-    nb = WorkerNetworkBandwidth(s)
-    nb.update()
-
-    for idx, ws in enumerate(s.workers.values()):
-        assert ws.metrics["read_bytes"] == nb.source.data["x_read"][idx]
-        assert ws.metrics["write_bytes"] == nb.source.data["x_write"][idx]
-
-
-@gen_cluster(client=True)
 async def test_TaskGraph(c, s, a, b):
     gp = TaskGraph(s)
     futures = c.map(inc, range(5))
@@ -596,7 +530,7 @@ async def test_TaskGraph_limit(c, s, a, b):
     assert len(gp.node_source.data["x"]) == 0
 
 
-@gen_cluster(client=True)
+@gen_cluster(client=True, timeout=30)
 async def test_TaskGraph_complex(c, s, a, b):
     da = pytest.importorskip("dask.array")
     gp = TaskGraph(s)
@@ -637,68 +571,6 @@ async def test_TaskGraph_order(c, s, a, b):
     gp.update()
 
     assert gp.node_source.data["state"][gp.layout.index[y.key]] == "erred"
-
-
-@gen_cluster(client=True)
-async def test_TaskGroupGraph(c, s, a, b):
-    tgg = TaskGroupGraph(s)
-    futures = c.map(inc, range(10))
-    await wait(futures)
-
-    tgg.update()
-    assert all(len(L) == 1 for L in tgg.nodes_source.data.values())
-    assert tgg.nodes_source.data["name"] == ["inc"]
-    assert tgg.nodes_source.data["tot_tasks"] == [10]
-
-    assert all(len(L) == 0 for L in tgg.arrows_source.data.values())
-
-    futures2 = c.map(dec, range(5))
-    await wait(futures2)
-
-    tgg.update()
-    assert all(len(L) == 2 for L in tgg.nodes_source.data.values())
-    assert tgg.nodes_source.data["name"] == ["inc", "dec"]
-    assert tgg.nodes_source.data["tot_tasks"] == [10, 5]
-
-    del futures, futures2
-    while s.task_groups:
-        await asyncio.sleep(0.01)
-
-    tgg.update()
-    assert not any(tgg.nodes_source.data.values())
-
-
-@gen_cluster(client=True)
-async def test_TaskGroupGraph_arrows(c, s, a, b):
-    tgg = TaskGroupGraph(s)
-
-    futures = c.map(inc, range(10))
-    await wait(futures)
-
-    tgg.update()
-    assert all(len(L) == 1 for L in tgg.nodes_source.data.values())
-    assert tgg.nodes_source.data["name"] == ["inc"]
-    assert tgg.nodes_source.data["tot_tasks"] == [10]
-
-    assert all(len(L) == 0 for L in tgg.arrows_source.data.values())
-
-    futures2 = c.map(dec, futures)
-    await wait(futures2)
-
-    tgg.update()
-    assert all(len(L) == 2 for L in tgg.nodes_source.data.values())
-    assert tgg.nodes_source.data["name"] == ["inc", "dec"]
-    assert tgg.nodes_source.data["tot_tasks"] == [10, 10]
-
-    assert all(len(L) == 1 for L in tgg.arrows_source.data.values())
-
-    del futures, futures2
-    while s.task_groups:
-        await asyncio.sleep(0.01)
-
-    tgg.update()  ###for some reason after deleting the futures the tgg.node_source.data.values are not clear.
-    assert not any(tgg.nodes_source.data.values())
-    assert not any(tgg.arrows_source.data.values())
 
 
 @gen_cluster(

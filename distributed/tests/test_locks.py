@@ -1,12 +1,13 @@
 import pickle
-from datetime import timedelta
 from time import sleep
+from datetime import timedelta
 
 import pytest
 
-from distributed import Client, Lock, get_client
+from distributed import Lock, get_client, Client
 from distributed.metrics import time
 from distributed.utils_test import gen_cluster
+from distributed.utils_test import client, cluster_fixture, loop  # noqa F401
 
 
 @gen_cluster(client=True, nthreads=[("127.0.0.1", 8)] * 2)

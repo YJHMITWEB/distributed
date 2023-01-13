@@ -1,6 +1,6 @@
-import sparse
+from .serialize import dask_serialize, dask_deserialize, serialize, deserialize
 
-from .serialize import dask_deserialize, dask_serialize, deserialize, serialize
+import sparse
 
 
 @dask_serialize.register(sparse.COO)

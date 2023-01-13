@@ -1,7 +1,5 @@
-import logging
-
 import pytest
-
+import logging
 from dask.sizeof import sizeof
 
 from distributed.sizeof import safe_sizeof

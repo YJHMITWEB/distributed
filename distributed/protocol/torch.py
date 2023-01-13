@@ -1,7 +1,7 @@
-import numpy as np
-import torch
+from .serialize import serialize, dask_serialize, dask_deserialize, register_generic
 
-from .serialize import dask_deserialize, dask_serialize, register_generic, serialize
+import torch
+import numpy as np
 
 
 @dask_serialize.register(torch.Tensor)

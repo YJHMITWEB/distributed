@@ -1,13 +1,12 @@
 import asyncio
+from collections import defaultdict, deque
 import logging
 import uuid
-from collections import defaultdict, deque
-
-from dask.utils import parse_timedelta
 
 from .client import Client
-from .utils import TimeoutError, log_errors
+from .utils import log_errors, TimeoutError
 from .worker import get_worker
+from .utils import parse_timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +143,7 @@ class Lock:
         return result
 
     def release(self):
-        """Release the lock if already acquired"""
+        """ Release the lock if already acquired """
         if not self.locked():
             raise ValueError("Lock is not yet acquired")
         result = self.client.sync(

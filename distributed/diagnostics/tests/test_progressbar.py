@@ -5,7 +5,8 @@ import pytest
 from distributed import Scheduler, Worker
 from distributed.diagnostics.progressbar import TextProgressBar, progress
 from distributed.metrics import time
-from distributed.utils_test import div, gen_cluster, inc
+from distributed.utils_test import inc, div, gen_cluster
+from distributed.utils_test import client, loop, cluster_fixture  # noqa: F401
 
 
 def test_text_progressbar(capsys, client):
@@ -42,8 +43,8 @@ async def test_TextProgressBar_error(c, s, a, b):
 @pytest.mark.asyncio
 async def test_TextProgressBar_empty(capsys):
     async with Scheduler(port=0) as s:
-        async with Worker(s.address, nthreads=1):
-            async with Worker(s.address, nthreads=1):
+        async with Worker(s.address, nthreads=1) as a:
+            async with Worker(s.address, nthreads=1) as b:
                 progress = TextProgressBar(
                     [], scheduler=s.address, start=False, interval=0.01
                 )

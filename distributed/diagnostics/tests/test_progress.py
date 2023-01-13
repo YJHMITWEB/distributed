@@ -4,17 +4,15 @@ import pytest
 
 from distributed import Nanny
 from distributed.client import wait
-from distributed.compatibility import LINUX
+from distributed.metrics import time
+from distributed.utils_test import gen_cluster, inc, dec, div, nodebug
 from distributed.diagnostics.progress import (
+    Progress,
+    SchedulerPlugin,
     AllProgress,
     GroupProgress,
     MultiProgress,
-    Progress,
-    SchedulerPlugin,
 )
-from distributed.metrics import time
-from distributed.scheduler import COMPILED
-from distributed.utils_test import dec, div, gen_cluster, inc, nodebug
 
 
 def f(*args):
@@ -96,9 +94,7 @@ def check_bar_completed(capsys, width=40):
     assert percent == "100% Completed"
 
 
-@pytest.mark.flaky(condition=not COMPILED and LINUX, reruns=10, reruns_delay=5)
-@pytest.mark.xfail(COMPILED, reason="Fails with cythonized scheduler")
-@gen_cluster(client=True, Worker=Nanny)
+@gen_cluster(client=True, Worker=Nanny, timeout=None)
 async def test_AllProgress(c, s, a, b):
     x, y, z = c.map(inc, [1, 2, 3])
     xx, yy, zz = c.map(dec, [x, y, z])
@@ -180,9 +176,8 @@ async def test_AllProgress(c, s, a, b):
     assert all(set(d) == {"div"} for d in p.state.values())
 
 
-@pytest.mark.flaky(condition=LINUX, reruns=10, reruns_delay=5)
 @gen_cluster(client=True, Worker=Nanny)
-async def test_AllProgress_lost_key(c, s, a, b):
+async def test_AllProgress_lost_key(c, s, a, b, timeout=None):
     p = AllProgress(s)
     futures = c.map(inc, range(5))
     await wait(futures)
@@ -191,8 +186,10 @@ async def test_AllProgress_lost_key(c, s, a, b):
     await a.close()
     await b.close()
 
+    start = time()
     while len(p.state["memory"]["inc"]) > 0:
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+        assert time() < start + 5
 
 
 @gen_cluster(client=True)

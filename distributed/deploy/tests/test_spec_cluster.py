@@ -1,20 +1,18 @@
 import asyncio
 import re
-import warnings
 from time import sleep
-
-import pytest
-import tlz as toolz
+import warnings
 
 import dask
-from dask.distributed import Client, Nanny, Scheduler, SpecCluster, Worker
-
-from distributed.compatibility import WINDOWS
+from dask.distributed import SpecCluster, Worker, Client, Scheduler, Nanny
 from distributed.core import Status
-from distributed.deploy.spec import ProcessInterface, close_clusters, run_spec
+from distributed.compatibility import WINDOWS
+from distributed.deploy.spec import close_clusters, ProcessInterface, run_spec
 from distributed.metrics import time
+from distributed.utils_test import loop, cleanup  # noqa: F401
 from distributed.utils import is_valid_xml
-from distributed.utils_test import gen_test
+import tlz as toolz
+import pytest
 
 
 class MyWorker(Worker):
@@ -139,8 +137,8 @@ async def test_scale(cleanup):
 
 
 @pytest.mark.slow
-@gen_test()
-async def test_adaptive_killed_worker():
+@pytest.mark.asyncio
+async def test_adaptive_killed_worker(cleanup):
     with dask.config.set({"distributed.deploy.lost-worker-timeout": 0.1}):
 
         async with SpecCluster(
@@ -148,10 +146,13 @@ async def test_adaptive_killed_worker():
             worker={"cls": Nanny, "options": {"nthreads": 1}},
             scheduler={"cls": Scheduler, "options": {"port": 0}},
         ) as cluster:
+
             async with Client(cluster, asynchronous=True) as client:
-                # Scale up a cluster with 1 worker.
+
                 cluster.adapt(minimum=1, maximum=1)
-                while not cluster.workers:
+
+                # Scale up a cluster with 1 worker.
+                while len(cluster.workers) != 1:
                     await asyncio.sleep(0.01)
 
                 future = client.submit(sleep, 0.1)
@@ -161,11 +162,11 @@ async def test_adaptive_killed_worker():
                 await cluster.workers[worker_id].kill()
 
                 # Wait for the worker to re-spawn and finish sleeping.
-                await future
+                await future.result(timeout=5)
 
 
-@gen_test()
-async def test_unexpected_closed_worker():
+@pytest.mark.asyncio
+async def test_unexpected_closed_worker(cleanup):
     worker = {"cls": Worker, "options": {"nthreads": 1}}
     with dask.config.set({"distributed.deploy.lost-worker-timeout": "10ms"}):
         async with SpecCluster(
@@ -195,20 +196,24 @@ async def test_unexpected_closed_worker():
             assert len(cluster.workers) == 2
 
 
-@gen_test(timeout=60)
-async def test_restart():
-    """Regression test for https://github.com/dask/distributed/issues/3062"""
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_restart(cleanup):
+    # Regression test for https://github.com/dask/distributed/issues/3062
     worker = {"cls": Nanny, "options": {"nthreads": 1}}
-    async with SpecCluster(
-        asynchronous=True, scheduler=scheduler, worker=worker
-    ) as cluster:
-        async with Client(cluster, asynchronous=True) as client:
-            cluster.scale(2)
-            await cluster
-            assert len(cluster.workers) == 2
-            await client.restart()
-            while len(cluster.workers) < 2:
-                await asyncio.sleep(0.01)
+    with dask.config.set({"distributed.deploy.lost-worker-timeout": "2s"}):
+        async with SpecCluster(
+            asynchronous=True, scheduler=scheduler, worker=worker
+        ) as cluster:
+            async with Client(cluster, asynchronous=True) as client:
+                cluster.scale(2)
+                await cluster
+                assert len(cluster.workers) == 2
+
+                await client.restart()
+                await asyncio.sleep(3)
+
+                assert len(cluster.workers) == 2
 
 
 @pytest.mark.skipif(WINDOWS, reason="HTTP Server doesn't close out")
@@ -280,8 +285,6 @@ async def test_logs(cleanup):
         await cluster
 
         logs = await cluster.get_logs()
-        assert isinstance(logs, dict)
-        assert all(isinstance(log, str) for log in logs)
         assert is_valid_xml("<div>" + logs._repr_html_() + "</div>")
         assert "Scheduler" in logs
         for worker in cluster.scheduler.workers:
@@ -357,8 +360,11 @@ async def test_widget(cleanup):
             await asyncio.sleep(0.01)
             assert time() < start + 1
 
+        assert "3" in cluster._widget_status()
+        assert "GB" in cluster._widget_status()
+
         cluster.scale(5)
-        assert "3 / 5" in cluster._scaling_status()
+        assert "3 / 5" in cluster._widget_status()
 
 
 @pytest.mark.asyncio
@@ -439,8 +445,8 @@ async def test_MultiWorker(cleanup):
             while "workers=4" not in repr(cluster):
                 await asyncio.sleep(0.1)
 
-            workers_line = re.search("(Workers.+)", cluster._repr_html_()).group(1)
-            assert re.match("Workers.*4", workers_line)
+            workers_line = re.search("(Workers.+)", cluster._widget_status()).group(1)
+            assert re.match("Workers.*<td>4</td>", workers_line)
 
             cluster.scale(1)
             await cluster
@@ -488,7 +494,7 @@ async def test_run_spec_cluster_worker_names(cleanup):
 
     class MyCluster(SpecCluster):
         def _new_worker_name(self, worker_number):
-            return f"prefix-{self.name}-{worker_number}-suffix"
+            return f"prefix-{self._name }-{worker_number}-suffix"
 
     async with SpecCluster(
         asynchronous=True, scheduler=scheduler, worker=worker

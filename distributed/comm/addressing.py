@@ -1,9 +1,11 @@
 import itertools
-
 import dask
 
-from ..utils import get_ip_interface
 from . import registry
+from ..utils import get_ip_interface
+
+
+DEFAULT_SCHEME = dask.config.get("distributed.comm.default-scheme")
 
 
 def parse_address(addr, strict=False):
@@ -26,7 +28,7 @@ def parse_address(addr, strict=False):
         )
         raise ValueError(msg)
     if not sep:
-        scheme = dask.config.get("distributed.comm.default-scheme")
+        scheme = DEFAULT_SCHEME
     return scheme, loc
 
 
@@ -37,7 +39,7 @@ def unparse_address(scheme, loc):
     >>> unparse_address('tcp', '127.0.0.1')
     'tcp://127.0.0.1'
     """
-    return f"{scheme}://{loc}"
+    return "%s://%s" % (scheme, loc)
 
 
 def normalize_address(addr):
@@ -60,11 +62,11 @@ def parse_host_port(address, default_port=None):
         return address
 
     def _fail():
-        raise ValueError(f"invalid address {address!r}")
+        raise ValueError("invalid address %r" % (address,))
 
     def _default():
         if default_port is None:
-            raise ValueError(f"missing port number in address {address!r}")
+            raise ValueError("missing port number in address %r" % (address,))
         return default_port
 
     if "://" in address:
@@ -99,7 +101,7 @@ def unparse_host_port(host, port=None):
     if ":" in host and not host.startswith("["):
         host = "[%s]" % host
     if port is not None:
-        return f"{host}:{port}"
+        return "%s:%s" % (host, port)
     else:
         return host
 
@@ -120,7 +122,7 @@ def get_address_host_port(addr, strict=False):
         return backend.get_address_host_port(loc)
     except NotImplementedError:
         raise ValueError(
-            f"don't know how to extract host and port for address {addr!r}"
+            "don't know how to extract host and port for address %r" % (addr,)
         )
 
 
@@ -262,7 +264,7 @@ def address_from_user_args(
     security=None,
     default_port=0,
 ) -> str:
-    """Get an address to listen on from common user provided arguments"""
+    """ Get an address to listen on from common user provided arguments """
 
     if security and security.require_encryption and not protocol:
         protocol = "tls"

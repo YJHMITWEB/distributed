@@ -10,17 +10,17 @@ from tlz import first
 from tornado.httpclient import AsyncHTTPClient
 
 from distributed.client import wait
-from distributed.dashboard.components.worker import (
-    CommunicatingStream,
-    CommunicatingTimeSeries,
-    Counters,
-    CrossFilter,
-    ExecutingTimeSeries,
-    StateTable,
-    SystemMonitor,
-)
 from distributed.metrics import time
-from distributed.utils_test import dec, gen_cluster, inc
+from distributed.utils_test import gen_cluster, inc, dec
+from distributed.dashboard.components.worker import (
+    StateTable,
+    CrossFilter,
+    CommunicatingStream,
+    ExecutingTimeSeries,
+    CommunicatingTimeSeries,
+    SystemMonitor,
+    Counters,
+)
 
 
 @gen_cluster(

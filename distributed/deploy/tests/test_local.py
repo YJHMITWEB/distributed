@@ -1,42 +1,42 @@
 import asyncio
+from functools import partial
 import gc
 import subprocess
 import sys
+from time import sleep
+from threading import Lock
 import unittest
 import weakref
 from distutils.version import LooseVersion
-from functools import partial
-from threading import Lock
-from time import sleep
 
-import pytest
+from tornado.ioloop import IOLoop
 import tornado
 from tornado.httpclient import AsyncHTTPClient
-from tornado.ioloop import IOLoop
+import pytest
 
 from dask.system import CPU_COUNT
-
-from distributed import Client, Nanny, Worker, get_client
-from distributed.compatibility import LINUX
+from distributed import Client, Worker, Nanny, get_client
 from distributed.core import Status
 from distributed.deploy.local import LocalCluster
-from distributed.deploy.utils_test import ClusterTest
 from distributed.metrics import time
-from distributed.scheduler import COMPILED
 from distributed.system import MEMORY_LIMIT
-from distributed.utils import TimeoutError, sync
-from distributed.utils_test import (
+from distributed.utils_test import (  # noqa: F401
+    clean,
+    cleanup,
+    inc,
+    gen_test,
+    slowinc,
+    assert_cannot_connect,
+    assert_can_connect_locally_4,
     assert_can_connect_from_everywhere_4,
     assert_can_connect_from_everywhere_4_6,
-    assert_can_connect_locally_4,
-    assert_cannot_connect,
     captured_logger,
-    clean,
-    gen_test,
-    inc,
-    slowinc,
     tls_only_security,
 )
+from distributed.utils_test import loop  # noqa: F401
+from distributed.utils import sync, TimeoutError
+
+from distributed.deploy.utils_test import ClusterTest
 
 
 def test_simple(loop):
@@ -83,7 +83,7 @@ def test_close_twice():
 
 def test_procs():
     with LocalCluster(
-        n_workers=2,
+        2,
         scheduler_port=0,
         processes=False,
         threads_per_worker=3,
@@ -98,7 +98,7 @@ def test_procs():
         repr(c)
 
     with LocalCluster(
-        n_workers=2,
+        2,
         scheduler_port=0,
         processes=True,
         threads_per_worker=3,
@@ -434,7 +434,7 @@ def test_blocks_until_full(loop):
 @pytest.mark.asyncio
 async def test_scale_up_and_down():
     async with LocalCluster(
-        n_workers=0,
+        0,
         scheduler_port=0,
         processes=False,
         silence_logs=False,
@@ -559,7 +559,7 @@ async def test_bokeh_kwargs(cleanup):
     ) as c:
         client = AsyncHTTPClient()
         response = await client.fetch(
-            f"http://localhost:{c.scheduler.http_server.port}/foo/status"
+            "http://localhost:{}/foo/status".format(c.scheduler.http_server.port)
         )
         assert "bokeh" in response.body.decode()
 
@@ -626,7 +626,7 @@ def test_no_ipywidgets(loop, monkeypatch):
 
 
 def test_scale(loop):
-    """Directly calling scale both up and down works as expected"""
+    """ Directly calling scale both up and down works as expected """
     with LocalCluster(
         scheduler_port=0,
         silence_logs=False,
@@ -685,7 +685,7 @@ def test_adapt(loop):
 
 
 def test_adapt_then_manual(loop):
-    """We can revert from adaptive, back to manual"""
+    """ We can revert from adaptive, back to manual """
     with LocalCluster(
         scheduler_port=0,
         silence_logs=False,
@@ -694,12 +694,13 @@ def test_adapt_then_manual(loop):
         processes=False,
         n_workers=8,
     ) as cluster:
+        sleep(0.1)
         cluster.adapt(minimum=0, maximum=4, interval="10ms")
 
         start = time()
         while cluster.scheduler.workers or cluster.workers:
-            sleep(0.01)
-            assert time() < start + 30
+            sleep(0.1)
+            assert time() < start + 5
 
         assert not cluster.workers
 
@@ -715,8 +716,8 @@ def test_adapt_then_manual(loop):
 
             start = time()
             while len(cluster.scheduler.workers) != 2:
-                sleep(0.01)
-                assert time() < start + 30
+                sleep(0.1)
+                assert time() < start + 5
 
 
 @pytest.mark.parametrize("temporary", [True, False])
@@ -762,7 +763,7 @@ async def test_scale_retires_workers():
 
     loop = IOLoop.current()
     cluster = await MyCluster(
-        n_workers=0,
+        0,
         scheduler_port=0,
         processes=False,
         silence_logs=False,
@@ -792,7 +793,6 @@ async def test_scale_retires_workers():
     await cluster.close()
 
 
-@pytest.mark.xfail(COMPILED, reason="Fails with cythonized scheduler")
 def test_local_tls_restart(loop):
     from distributed.utils_test import tls_only_security
 
@@ -843,7 +843,9 @@ def test_protocol_tcp(loop):
         assert cluster.scheduler.address.startswith("tcp://")
 
 
-@pytest.mark.skipif(not LINUX, reason="Need 127.0.0.2 to mean localhost")
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Need 127.0.0.2 to mean localhost"
+)
 def test_protocol_ip(loop):
     with LocalCluster(
         host="tcp://127.0.0.2", loop=loop, n_workers=0, processes=False
@@ -971,13 +973,11 @@ async def test_repr(cleanup):
         memory_limit="2GB",
         asynchronous=True,
     ) as cluster:
-        async with Client(cluster, asynchronous=True) as client:
-            await client.wait_for_workers(2)
         text = repr(cluster)
         assert "workers=2" in text
         assert cluster.scheduler_address in text
         assert "cores=4" in text or "threads=4" in text
-        assert "4.00 GB" in text or "3.73 GiB" in text
+        assert "GB" in text and "4" in text
 
     async with LocalCluster(
         n_workers=2, processes=False, memory_limit=None, asynchronous=True
@@ -988,7 +988,7 @@ async def test_repr(cleanup):
 @pytest.mark.asyncio
 async def test_threads_per_worker_set_to_0(cleanup):
     with pytest.warns(
-        Warning, match="Setting `threads_per_worker` to 0 has been deprecated."
+        Warning, match="Setting `threads_per_worker` to 0 is discouraged."
     ):
         async with LocalCluster(
             n_workers=2, processes=False, threads_per_worker=0, asynchronous=True
@@ -1018,6 +1018,9 @@ async def test_capture_security(cleanup, temporary):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.version_info < (3, 7), reason="asyncio.all_tasks not implemented"
+)
 async def test_no_danglng_asyncio_tasks(cleanup):
     start = asyncio.all_tasks()
     async with LocalCluster(asynchronous=True, processes=False):
@@ -1042,38 +1045,3 @@ async def test_no_workers(cleanup):
         n_workers=0, silence_logs=False, dashboard_address=None, asynchronous=True
     ) as c:
         pass
-
-
-@pytest.mark.asyncio
-async def test_cluster_names():
-    async with LocalCluster(processes=False, asynchronous=True) as unnamed_cluster:
-        async with LocalCluster(
-            processes=False, asynchronous=True, name="mycluster"
-        ) as named_cluster:
-            assert isinstance(unnamed_cluster.name, str)
-            assert isinstance(named_cluster.name, str)
-            assert named_cluster.name == "mycluster"
-            assert unnamed_cluster == unnamed_cluster
-            assert named_cluster == named_cluster
-            assert unnamed_cluster != named_cluster
-
-        async with LocalCluster(processes=False, asynchronous=True) as unnamed_cluster2:
-            assert unnamed_cluster2 != unnamed_cluster
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("nanny", [True, False])
-async def test_local_cluster_redundant_kwarg(nanny):
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        # Extra arguments are forwarded to the worker class. Depending on
-        # whether we use the nanny or not, the error treatment is quite
-        # different and we should assert that an exception is raised
-        async with await LocalCluster(
-            typo_kwarg="foo", processes=nanny, n_workers=1
-        ) as cluster:
-
-            # This will never work but is a reliable way to block without hard
-            # coding any sleep values
-            async with Client(cluster) as c:
-                f = c.submit(sleep, 0)
-                await f

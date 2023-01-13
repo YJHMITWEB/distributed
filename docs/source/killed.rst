@@ -80,7 +80,7 @@ of distributed may do this automatically)
 
 For other errors, you might want to run the computation in your local client, if
 possible, or try grabbing just the task that errored and using
-:meth:`~distributed.recreate_tasks.ReplayTaskClient.recreate_error_locally`,
+:func:`recreate_error_locally <distributed.recreate_exceptions.ReplayExceptionClient.recreate_error_locally>`,
 as you would for ordinary exceptions happening during task execution.
 
 Specifically for connectivity problems (e.g., timeout exceptions in the worker

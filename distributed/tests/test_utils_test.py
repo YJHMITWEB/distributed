@@ -1,26 +1,33 @@
 import asyncio
-import pathlib
+from contextlib import contextmanager
 import socket
 import threading
-from contextlib import contextmanager
 from time import sleep
 
 import pytest
 from tornado import gen
 
-from distributed import Client, Nanny, Scheduler, Worker, config, default_client
+from distributed import Scheduler, Worker, Nanny, Client, config, default_client
 from distributed.core import rpc
 from distributed.metrics import time
-from distributed.utils import get_ip
-from distributed.utils_test import (
+from distributed.utils_test import (  # noqa: F401
+    cleanup,
     cluster,
     gen_cluster,
-    gen_test,
     inc,
-    new_config,
-    tls_only_security,
+    gen_test,
     wait_for_port,
+    new_config,
 )
+
+from distributed.utils_test import (  # noqa: F401
+    loop,
+    tls_only_security,
+    security,
+    tls_client,
+    tls_cluster,
+)
+from distributed.utils import get_ip
 
 
 def test_bare_cluster(loop):
@@ -44,47 +51,6 @@ async def test_gen_cluster(c, s, a, b):
         assert isinstance(w, Worker)
     assert s.nthreads == {w.address: w.nthreads for w in [a, b]}
     assert await c.submit(lambda: 123) == 123
-
-
-@gen_cluster(client=True)
-async def test_gen_cluster_pytest_fixture(c, s, a, b, tmp_path):
-    assert isinstance(tmp_path, pathlib.Path)
-    assert isinstance(c, Client)
-    assert isinstance(s, Scheduler)
-    for w in [a, b]:
-        assert isinstance(w, Worker)
-
-
-@pytest.mark.parametrize("foo", [True])
-@gen_cluster(client=True)
-async def test_gen_cluster_parametrized(c, s, a, b, foo):
-    assert foo is True
-    assert isinstance(c, Client)
-    assert isinstance(s, Scheduler)
-    for w in [a, b]:
-        assert isinstance(w, Worker)
-
-
-@pytest.mark.parametrize("foo", [True])
-@pytest.mark.parametrize("bar", ["a", "b"])
-@gen_cluster(client=True)
-async def test_gen_cluster_multi_parametrized(c, s, a, b, foo, bar):
-    assert foo is True
-    assert bar in ("a", "b")
-    assert isinstance(c, Client)
-    assert isinstance(s, Scheduler)
-    for w in [a, b]:
-        assert isinstance(w, Worker)
-
-
-@pytest.mark.parametrize("foo", [True])
-@gen_cluster(client=True)
-async def test_gen_cluster_parametrized_variadic_workers(c, s, *workers, foo):
-    assert foo is True
-    assert isinstance(c, Client)
-    assert isinstance(s, Scheduler)
-    for w in workers:
-        assert isinstance(w, Worker)
 
 
 @gen_cluster(
@@ -141,7 +107,7 @@ def test_gen_cluster_cleans_up_client(loop):
     assert not dask.config.get("get", None)
 
 
-@gen_cluster()
+@gen_cluster(client=False)
 async def test_gen_cluster_without_client(s, a, b):
     assert isinstance(s, Scheduler)
     for w in [a, b]:
@@ -253,7 +219,7 @@ def test_lingering_client():
         default_client()
 
 
-def test_lingering_client_2(loop):
+def test_lingering_client(loop):
     with cluster() as (s, [a, b]):
         client = Client(s["address"], loop=loop)
 

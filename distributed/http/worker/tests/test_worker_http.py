@@ -1,8 +1,6 @@
-import json
-
 import pytest
+import json
 from tornado.httpclient import AsyncHTTPClient
-
 from distributed.utils_test import gen_cluster
 
 

@@ -1,6 +1,6 @@
-import netCDF4
+from .serialize import dask_serialize, dask_deserialize, serialize, deserialize
 
-from .serialize import dask_deserialize, dask_serialize, deserialize, serialize
+import netCDF4
 
 
 @dask_serialize.register(netCDF4.Dataset)

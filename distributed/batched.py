@@ -1,13 +1,13 @@
-import logging
 from collections import deque
+import logging
 
+import dask
 from tornado import gen, locks
 from tornado.ioloop import IOLoop
 
-import dask
-from dask.utils import parse_timedelta
-
 from .core import CommClosedError
+from .utils import parse_timedelta
+
 
 logger = logging.getLogger(__name__)
 
@@ -127,16 +127,16 @@ class BatchedSend:
         self.stopped.set()
         self.abort()
 
-    def send(self, *msgs):
+    def send(self, msg):
         """Schedule a message for sending to the other side
 
         This completes quickly and synchronously
         """
         if self.comm is not None and self.comm.closed():
-            raise CommClosedError()
+            raise CommClosedError
 
-        self.message_count += len(msgs)
-        self.buffer.extend(msgs)
+        self.message_count += 1
+        self.buffer.append(msg)
         # Avoid spurious wakeups if possible
         if self.next_deadline is None:
             self.waker.set()

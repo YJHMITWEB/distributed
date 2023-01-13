@@ -96,7 +96,8 @@ class Datasets(MutableMapping):
                 "Can't invoke iter() or 'for' on client.datasets when client is "
                 "asynchronous; use 'async for' instead"
             )
-        yield from self._client.list_datasets()
+        for key in self._client.list_datasets():
+            yield key
 
     def __aiter__(self):
         if not self._client.asynchronous:

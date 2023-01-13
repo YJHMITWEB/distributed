@@ -7,11 +7,11 @@ except ImportError:
 
 import pytest
 
-import dask
-
 from distributed.comm import connect, listen
 from distributed.security import Security
 from distributed.utils_test import get_cert
+
+import dask
 
 ca_file = get_cert("tls-ca-cert.pem")
 
@@ -42,7 +42,6 @@ def test_defaults():
     assert sec.tls_scheduler_cert is None
     assert sec.tls_worker_key is None
     assert sec.tls_worker_cert is None
-    assert sec.extra_conn_args == {}
 
 
 def test_constructor_errors():
@@ -93,10 +92,7 @@ def test_kwargs():
     }
     with dask.config.set(c):
         sec = Security(
-            tls_scheduler_cert="newcert.pem",
-            require_encryption=True,
-            tls_ca_file=None,
-            extra_conn_args={"headers": {"Auth": "Token abc"}},
+            tls_scheduler_cert="newcert.pem", require_encryption=True, tls_ca_file=None
         )
     assert sec.require_encryption is True
     assert sec.tls_ca_file is None
@@ -107,7 +103,6 @@ def test_kwargs():
     assert sec.tls_scheduler_cert == "newcert.pem"
     assert sec.tls_worker_key is None
     assert sec.tls_worker_cert is None
-    assert sec.extra_conn_args == {"headers": {"Auth": "Token abc"}}
 
 
 def test_repr():
@@ -203,30 +198,6 @@ def test_connection_args():
     assert len(tls_12_ciphers) == 1
     tls_13_ciphers = [c for c in supported_ciphers if "TLSv1.3" in c["description"]]
     assert len(tls_13_ciphers) in (0, 3)
-
-
-def test_extra_conn_args_connection_args():
-    c = {
-        "distributed.comm.tls.ca-file": ca_file,
-        "distributed.comm.tls.scheduler.key": key1,
-        "distributed.comm.tls.scheduler.cert": cert1,
-        "distributed.comm.tls.worker.cert": keycert1,
-    }
-    with dask.config.set(c):
-        sec = Security(extra_conn_args={"headers": {"Authorization": "Token abcd"}})
-
-    d = sec.get_connection_args("scheduler")
-    assert not d["require_encryption"]
-    assert d["extra_conn_args"]["headers"] == {"Authorization": "Token abcd"}
-    ctx = d["ssl_context"]
-
-    d = sec.get_connection_args("worker")
-    assert d["extra_conn_args"]["headers"] == {"Authorization": "Token abcd"}
-
-    # No cert defined => no TLS
-    d = sec.get_connection_args("client")
-    assert d.get("ssl_context") is None
-    assert d["extra_conn_args"]["headers"] == {"Authorization": "Token abcd"}
 
 
 def test_listen_args():
@@ -395,7 +366,7 @@ def test_temporary_credentials():
     sec_repr = repr(sec)
     fields = ["tls_ca_file"]
     fields.extend(
-        f"tls_{role}_{kind}"
+        "tls_%s_%s" % (role, kind)
         for role in ["client", "scheduler", "worker"]
         for kind in ["key", "cert"]
     )
@@ -403,13 +374,6 @@ def test_temporary_credentials():
         val = getattr(sec, f)
         assert "\n" in val
         assert val not in sec_repr
-
-
-def test_extra_conn_args_in_temporary_credentials():
-    pytest.importorskip("cryptography")
-
-    sec = Security.temporary(extra_conn_args={"headers": {"X-Request-ID": "abcd"}})
-    assert sec.extra_conn_args == {"headers": {"X-Request-ID": "abcd"}}
 
 
 @pytest.mark.asyncio

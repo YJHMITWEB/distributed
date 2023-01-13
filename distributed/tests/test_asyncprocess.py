@@ -8,16 +8,14 @@ import weakref
 from datetime import timedelta
 from time import sleep
 
-import psutil
 import pytest
 from tornado import gen
 from tornado.locks import Event
 
-from distributed.compatibility import WINDOWS
 from distributed.metrics import time
 from distributed.process import AsyncProcess
 from distributed.utils import mp_context
-from distributed.utils_test import gen_test, nodebug, pristine_loop
+from distributed.utils_test import gen_test, pristine_loop, nodebug
 
 
 def feed(in_q, out_q):
@@ -50,6 +48,7 @@ def threads_info(q):
     q.put(threading.current_thread().name)
 
 
+@pytest.mark.xfail(reason="Intermittent failure")
 @nodebug
 @gen_test()
 async def test_simple():
@@ -93,7 +92,7 @@ async def test_simple():
 
     # child should be stopping now
     t1 = time()
-    await proc.join(timeout=30)
+    await proc.join(timeout=10)
     dt = time() - t1
     assert dt <= 1.0
     assert not proc.is_alive()
@@ -155,12 +154,12 @@ async def test_exitcode():
     assert proc.exitcode is None
 
     q.put(5)
-    await proc.join(timeout=30)
+    await proc.join(timeout=3.0)
     assert not proc.is_alive()
     assert proc.exitcode == 5
 
 
-@pytest.mark.skipif(WINDOWS, reason="POSIX only")
+@pytest.mark.skipif(os.name == "nt", reason="POSIX only")
 @gen_test()
 async def test_signal():
     proc = AsyncProcess(target=exit_with_signal, args=(signal.SIGINT,))
@@ -169,7 +168,7 @@ async def test_signal():
     assert proc.exitcode is None
 
     await proc.start()
-    await proc.join(timeout=30)
+    await proc.join(timeout=3.0)
 
     assert not proc.is_alive()
     # Can be 255 with forkserver, see https://bugs.python.org/issue30589
@@ -178,7 +177,7 @@ async def test_signal():
     proc = AsyncProcess(target=wait)
     await proc.start()
     os.kill(proc.pid, signal.SIGTERM)
-    await proc.join(timeout=30)
+    await proc.join(timeout=3.0)
 
     assert not proc.is_alive()
     assert proc.exitcode in (-signal.SIGTERM, 255)
@@ -191,7 +190,7 @@ async def test_terminate():
     await proc.start()
     await proc.terminate()
 
-    await proc.join(timeout=30)
+    await proc.join(timeout=3.0)
     assert not proc.is_alive()
     assert proc.exitcode in (-signal.SIGTERM, 255)
 
@@ -281,9 +280,13 @@ async def test_child_main_thread():
     q._writer.close()
 
 
-@pytest.mark.skipif(WINDOWS, reason="num_fds not supported on windows")
+@pytest.mark.skipif(
+    sys.platform.startswith("win"), reason="num_fds not supported on windows"
+)
 @gen_test()
 async def test_num_fds():
+    psutil = pytest.importorskip("psutil")
+
     # Warm up
     proc = AsyncProcess(target=exit_now)
     proc.daemon = True
@@ -300,8 +303,11 @@ async def test_num_fds():
     assert not proc.is_alive()
     assert proc.exitcode == 0
 
+    start = time()
     while p.num_fds() > before:
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+        print("fds:", before, p.num_fds())
+        assert time() < start + 10
 
 
 @gen_test()
@@ -355,7 +361,7 @@ def _parent_process(child_pipe):
 
     with pristine_loop() as loop:
         try:
-            loop.run_sync(parent_process_coroutine, timeout=10)
+            loop.run_sync(parent_process_coroutine(), timeout=10)
         finally:
             loop.stop()
 
@@ -400,8 +406,10 @@ def test_asyncprocess_child_teardown_on_parent_exit():
         # test failure.
         try:
             readable = children_alive.poll(short_timeout)
-        except BrokenPipeError:
-            assert WINDOWS, "should only raise on windows"
+        except EnvironmentError:
+            # Windows can raise BrokenPipeError. EnvironmentError is caught for
+            # Python2/3 portability.
+            assert sys.platform.startswith("win"), "should only raise on windows"
             # Broken pipe implies closed, which is readable.
             readable = True
 
@@ -415,14 +423,16 @@ def test_asyncprocess_child_teardown_on_parent_exit():
             result = children_alive.recv()
         except EOFError:
             pass  # Test passes.
-        except BrokenPipeError:
-            assert WINDOWS, "should only raise on windows"
+        except EnvironmentError:
+            # Windows can raise BrokenPipeError. EnvironmentError is caught for
+            # Python2/3 portability.
+            assert sys.platform.startswith("win"), "should only raise on windows"
             # Test passes.
         else:
             # Oops, children_alive read something. It should be closed. If
             # something was read, it's a message from the child telling us they
             # are still alive!
-            raise RuntimeError(f"unreachable: {result}")
+            raise RuntimeError("unreachable: {}".format(result))
 
     finally:
         # Cleanup.

@@ -1,5 +1,5 @@
-from ...utils import log_errors
 from ..utils import RequestHandler, redirect
+from ...utils import log_errors
 
 
 class MissingBokeh(RequestHandler):

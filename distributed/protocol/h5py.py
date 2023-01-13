@@ -1,6 +1,6 @@
-import h5py
+from .serialize import dask_serialize, dask_deserialize
 
-from .serialize import dask_deserialize, dask_serialize
+import h5py
 
 
 @dask_serialize.register(h5py.File)

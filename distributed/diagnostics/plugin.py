@@ -3,9 +3,6 @@ import os
 import socket
 import subprocess
 import sys
-import uuid
-
-from dask.utils import funcname
 
 logger = logging.getLogger(__name__)
 
@@ -60,37 +57,37 @@ class SchedulerPlugin:
         pass
 
     def update_graph(self, scheduler, dsk=None, keys=None, restrictions=None, **kwargs):
-        """Run when a new graph / tasks enter the scheduler"""
+        """ Run when a new graph / tasks enter the scheduler """
 
     def restart(self, scheduler, **kwargs):
-        """Run when the scheduler restarts itself"""
+        """ Run when the scheduler restarts itself """
 
     def transition(self, key, start, finish, *args, **kwargs):
         """Run whenever a task changes state
 
         Parameters
         ----------
-        key : string
-        start : string
+        key: string
+        start: string
             Start state of the transition.
             One of released, waiting, processing, memory, error.
-        finish : string
+        finish: string
             Final state of the transition.
-        *args, **kwargs : More options passed when transitioning
+        *args, **kwargs: More options passed when transitioning
             This may include worker ID, compute time, etc.
         """
 
     def add_worker(self, scheduler=None, worker=None, **kwargs):
-        """Run when a new worker enters the cluster"""
+        """ Run when a new worker enters the cluster """
 
     def remove_worker(self, scheduler=None, worker=None, **kwargs):
-        """Run when a worker leaves the cluster"""
+        """ Run when a worker leaves the cluster """
 
     def add_client(self, scheduler=None, client=None, **kwargs):
-        """Run when a new client connects"""
+        """ Run when a new client connects """
 
     def remove_client(self, scheduler=None, client=None, **kwargs):
-        """Run when a client disconnects"""
+        """ Run when a client disconnects """
 
 
 class WorkerPlugin:
@@ -134,7 +131,7 @@ class WorkerPlugin:
         """
 
     def teardown(self, worker):
-        """Run when the worker to which the plugin is attached to is closed"""
+        """ Run when the worker to which the plugin is attached to is closed """
 
     def transition(self, key, start, finish, **kwargs):
         """
@@ -147,13 +144,13 @@ class WorkerPlugin:
 
         Parameters
         ----------
-        key : string
-        start : string
+        key: string
+        start: string
             Start state of the transition.
             One of waiting, ready, executing, long-running, memory, error.
-        finish : string
+        finish: string
             Final state of the transition.
-        kwargs : More options passed when transitioning
+        kwargs: More options passed when transitioning
         """
 
     def release_key(self, key, state, cause, reason, report):
@@ -162,26 +159,31 @@ class WorkerPlugin:
 
         Parameters
         ----------
-        key : string
-        state : string
+        key: string
+        state: string
             State of the released task.
             One of waiting, ready, executing, long-running, memory, error.
-        cause : string or None
+        cause: string or None
             Additional information on what triggered the release of the task.
-        reason : None
+        reason: None
             Not used.
-        report : bool
+        report: bool
             Whether the worker should report the released task to the scheduler.
         """
 
+    def release_dep(self, dep, state, report):
+        """
+        Called when the worker releases a dependency.
 
-def _get_worker_plugin_name(plugin) -> str:
-    """Returns the worker plugin name. If plugin has no name attribute
-    a random name is used."""
-    if hasattr(plugin, "name"):
-        return plugin.name
-    else:
-        return funcname(type(plugin)) + "-" + str(uuid.uuid4())
+        Parameters
+        ----------
+        dep: string
+        state: string
+            State of the released dependency.
+            One of waiting, flight, memory.
+        report: bool
+            Whether the worker should report the released dependency to the scheduler.
+        """
 
 
 class PipInstall(WorkerPlugin):
@@ -235,8 +237,9 @@ class PipInstall(WorkerPlugin):
         async with Lock(socket.gethostname()):  # don't clobber one installation
             logger.info("Pip installing the following packages: %s", self.packages)
             proc = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install"]
+                [sys.executable, "-m", "pip"]
                 + self.pip_options
+                + ["install"]
                 + self.packages,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

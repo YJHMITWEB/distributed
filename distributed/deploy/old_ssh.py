@@ -1,6 +1,6 @@
 import logging
-import os
 import socket
+import os
 import sys
 import time
 import traceback
@@ -13,7 +13,9 @@ except ImportError:  # Python 2.7 fix
 from threading import Thread
 
 from tlz import merge
+
 from tornado import gen
+
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ class bcolors:
 def async_ssh(cmd_dict):
     import paramiko
     from paramiko.buffered_pipe import PipeTimeout
-    from paramiko.ssh_exception import PasswordRequiredException, SSHException
+    from paramiko.ssh_exception import SSHException, PasswordRequiredException
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -51,8 +53,8 @@ def async_ssh(cmd_dict):
                 port=cmd_dict["ssh_port"],
                 key_filename=cmd_dict["ssh_private_key"],
                 compress=True,
-                timeout=30,
-                banner_timeout=30,
+                timeout=20,
+                banner_timeout=20,
             )  # Helps prevent timeouts when many concurrent ssh connections are opened.
             # Connection successful, break out of while loop
             break
@@ -100,7 +102,7 @@ def async_ssh(cmd_dict):
             print(
                 "               "
                 + bcolors.FAIL
-                + f"Retrying... (attempt {retries}/3)"
+                + "Retrying... (attempt {n}/{total})".format(n=retries, total=3)
                 + bcolors.ENDC
             )
 
@@ -152,7 +154,7 @@ def async_ssh(cmd_dict):
                 cmd_dict["output_queue"].put(
                     "[ {label} ] : ".format(label=cmd_dict["label"])
                     + bcolors.FAIL
-                    + line
+                    + "{output}".format(output=line)
                     + bcolors.ENDC
                 )
                 line = stderr.readline()
@@ -215,14 +217,18 @@ def start_scheduler(
 
     # Optionally re-direct stdout and stderr to a logfile
     if logdir is not None:
-        cmd = f"mkdir -p {logdir} && {cmd}"
+        cmd = "mkdir -p {logdir} && ".format(logdir=logdir) + cmd
         cmd += "&> {logdir}/dask_scheduler_{addr}:{port}.log".format(
             addr=addr, port=port, logdir=logdir
         )
 
     # Format output labels we can prepend to each line of output, and create
     # a 'status' key to keep track of jobs that terminate prematurely.
-    label = f"{bcolors.BOLD}scheduler {addr}:{port}{bcolors.ENDC}"
+    label = (
+        bcolors.BOLD
+        + "scheduler {addr}:{port}".format(addr=addr, port=port)
+        + bcolors.ENDC
+    )
 
     # Create a command dictionary, which contains everything we need to run and
     # interact with this command.
@@ -305,12 +311,12 @@ def start_worker(
 
     # Optionally redirect stdout and stderr to a logfile
     if logdir is not None:
-        cmd = f"mkdir -p {logdir} && {cmd}"
+        cmd = "mkdir -p {logdir} && ".format(logdir=logdir) + cmd
         cmd += "&> {logdir}/dask_scheduler_{addr}.log".format(
             addr=worker_addr, logdir=logdir
         )
 
-    label = f"worker {worker_addr}"
+    label = "worker {addr}".format(addr=worker_addr)
 
     # Create a command dictionary, which contains everything we need to run and
     # interact with this command.

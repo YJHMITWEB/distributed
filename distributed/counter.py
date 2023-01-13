@@ -2,6 +2,7 @@ from collections import defaultdict
 
 from tornado.ioloop import IOLoop, PeriodicCallback
 
+
 try:
     from crick import TDigest
 except ImportError:

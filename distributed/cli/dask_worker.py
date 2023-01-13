@@ -1,20 +1,16 @@
 import asyncio
 import atexit
-import gc
+from contextlib import suppress
 import logging
+import gc
 import os
 import signal
 import sys
 import warnings
-from contextlib import suppress
 
 import click
-from tlz import valmap
-from tornado.ioloop import IOLoop, TimeoutError
-
 import dask
 from dask.system import CPU_COUNT
-
 from distributed import Nanny
 from distributed.cli.utils import check_python_3, install_signal_handlers
 from distributed.comm import get_address_host_port
@@ -24,7 +20,10 @@ from distributed.proctitle import (
     enable_proctitle_on_children,
     enable_proctitle_on_current,
 )
-from distributed.utils import import_term
+from distributed.utils import deserialize_for_cli, import_term
+
+from tlz import valmap
+from tornado.ioloop import IOLoop, TimeoutError
 
 logger = logging.getLogger("distributed.dask_worker")
 
@@ -121,7 +120,7 @@ pem_file_option_type = click.Path(exists=True, resolve_path=True)
     "--interface", type=str, default=None, help="Network interface like 'eth0' or 'ib0'"
 )
 @click.option(
-    "--protocol", type=str, default=None, help="Protocol like tcp, tls, or ucx"
+    "--protocol", type=str, default=None, help="Protocol like tcp, tls, ucx, or ucr"
 )
 @click.option("--nthreads", type=int, default=0, help="Number of threads per process.")
 @click.option(
@@ -265,7 +264,7 @@ def main(
     dashboard_address,
     worker_class,
     preload_nanny,
-    **kwargs,
+    **kwargs
 ):
     g0, g1, g2 = gc.get_threshold()  # https://github.com/dask/distributed/issues/1653
     gc.set_threshold(g0 * 3, g1 * 3, g2 * 3)
@@ -403,6 +402,10 @@ def main(
     with suppress(TypeError, ValueError):
         name = int(name)
 
+    if "DASK_INTERNAL_INHERIT_CONFIG" in os.environ:
+        config = deserialize_for_cli(os.environ["DASK_INTERNAL_INHERIT_CONFIG"])
+        dask.config.update(dask.config.global_config, config)
+
     nannies = [
         t(
             scheduler,
@@ -419,7 +422,7 @@ def main(
             name=name
             if nprocs == 1 or name is None or name == ""
             else str(name) + "-" + str(i),
-            **kwargs,
+            **kwargs
         )
         for i in range(nprocs)
     ]

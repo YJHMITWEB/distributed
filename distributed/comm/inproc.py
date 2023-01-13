@@ -1,19 +1,21 @@
 import asyncio
+from collections import deque, namedtuple
 import itertools
 import logging
 import os
 import threading
-import warnings
 import weakref
-from collections import deque, namedtuple
+import warnings
 
 from tornado.concurrent import Future
 from tornado.ioloop import IOLoop
 
 from ..protocol import nested_deserialize
 from ..utils import get_ip
-from .core import Comm, CommClosedError, Connector, Listener
+
 from .registry import Backend, backends
+from .core import Comm, Connector, Listener, CommClosedError
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ class Manager:
     def add_listener(self, addr, listener):
         with self.lock:
             if addr in self.listeners:
-                raise RuntimeError(f"already listening on {addr!r}")
+                raise RuntimeError("already listening on %r" % (addr,))
             self.listeners[addr] = listener
 
     def remove_listener(self, addr):
@@ -170,7 +172,7 @@ class InProc(Comm):
 
     def _get_finalizer(self):
         def finalize(write_q=self._write_q, write_loop=self._write_loop, r=repr(self)):
-            logger.warning(f"Closing dangling queue in {r}")
+            logger.warning("Closing dangling queue in %s" % (r,))
             write_loop.add_callback(write_q.put_nowait, _EOF)
 
         return finalize
@@ -185,13 +187,13 @@ class InProc(Comm):
 
     async def read(self, deserializers="ignored"):
         if self._closed:
-            raise CommClosedError()
+            raise CommClosedError
 
         msg = await self._read_q.get()
         if msg is _EOF:
             self._closed = True
             self._finalizer.detach()
-            raise CommClosedError()
+            raise CommClosedError
 
         if self.deserialize:
             msg = nested_deserialize(msg)
@@ -199,7 +201,7 @@ class InProc(Comm):
 
     async def write(self, msg, serializers=None, on_error=None):
         if self.closed():
-            raise CommClosedError()
+            raise CommClosedError
 
         # Ensure we feed the queue in the same thread it is read from.
         self._write_loop.add_callback(self._write_q.put_nowait, msg)
@@ -296,7 +298,7 @@ class InProcConnector(Connector):
     async def connect(self, address, deserialize=True, **connection_args):
         listener = self.manager.get_listener_for(address)
         if listener is None:
-            raise OSError(f"no endpoint for inproc address {address!r}")
+            raise IOError("no endpoint for inproc address %r" % (address,))
 
         conn_req = ConnectionRequest(
             c2s_q=Queue(),

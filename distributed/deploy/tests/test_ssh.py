@@ -3,17 +3,10 @@ import pytest
 pytest.importorskip("asyncssh")
 
 import sys
-
 import dask
-
-from distributed import Client
-from distributed.compatibility import MACOS, WINDOWS
+from dask.distributed import Client
 from distributed.deploy.ssh import SSHCluster
-
-pytestmark = [
-    pytest.mark.xfail(MACOS, reason="very high flakiness; see distributed/issues/4543"),
-    pytest.mark.skipif(WINDOWS, reason="no CI support; see distributed/issues/4509"),
-]
+from distributed.utils_test import loop  # noqa: F401
 
 
 def test_ssh_hosts_None():
@@ -68,7 +61,7 @@ async def test_keywords():
             assert all(v["nthreads"] == 2 for v in d.values())
 
 
-@pytest.mark.avoid_ci
+@pytest.mark.avoid_travis
 def test_defer_to_old(loop):
     with pytest.warns(Warning):
         with SSHCluster(
@@ -81,8 +74,8 @@ def test_defer_to_old(loop):
             assert isinstance(c, OldSSHCluster)
 
 
-@pytest.mark.avoid_ci
-def test_old_ssh_with_local_dir(loop):
+@pytest.mark.avoid_travis
+def test_old_ssh_wih_local_dir(loop):
     with pytest.warns(Warning):
         from distributed.deploy.old_ssh import SSHCluster as OldSSHCluster
 

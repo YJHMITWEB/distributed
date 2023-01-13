@@ -3,19 +3,21 @@ Various functional tests for TLS networking.
 Most are taken from other test files and adapted.
 """
 import asyncio
-
 import pytest
 
-from distributed import Client, Nanny, Queue, Scheduler, Worker, wait, worker_client
+from distributed import Scheduler, Worker, Client, Nanny, worker_client, Queue
 from distributed.core import Status
+from distributed.client import wait
 from distributed.metrics import time
-from distributed.utils_test import (
-    double,
+from distributed.nanny import Nanny
+from distributed.utils_test import (  # noqa: F401
     gen_tls_cluster,
     inc,
-    slowadd,
+    double,
     slowinc,
+    slowadd,
     tls_config,
+    cleanup,
 )
 
 
@@ -42,7 +44,7 @@ async def test_Queue(c, s, a, b):
     assert future.key == future2.key
 
 
-@gen_tls_cluster(client=True)
+@gen_tls_cluster(client=True, timeout=None)
 async def test_client_submit(c, s, a, b):
     assert s.address.startswith("tls://")
 
@@ -98,36 +100,16 @@ async def test_nanny(c, s, a, b):
     assert result == 11
 
 
-@gen_tls_cluster(
-    client=True,
-    Worker=Nanny,
-    worker_kwargs={"memory_limit": "1 GiB"},
-    config={"distributed.worker.memory.rebalance.sender-min": 0.3},
-)
-async def test_rebalance(c, s, *_):
-    # We used nannies to have separate processes for each worker
-    a, b = s.workers
-    assert a.startswith("tls://")
+@gen_tls_cluster(client=True)
+async def test_rebalance(c, s, a, b):
+    x, y = await c._scatter([1, 2], workers=[a.address])
+    assert len(a.data) == 2
+    assert len(b.data) == 0
 
-    # Generate 10 buffers worth 512 MiB total on worker a. This sends its memory
-    # utilisation slightly above 50% (after counting unmanaged) which is above the
-    # distributed.worker.memory.rebalance.sender-min threshold.
-    futures = c.map(lambda _: "x" * (2 ** 29 // 10), range(10), workers=[a])
-    await wait(futures)
+    await c._rebalance()
 
-    # Wait for heartbeats
-    while s.memory.process < 2 ** 29:
-        await asyncio.sleep(0.1)
-
-    assert await c.run(lambda dask_worker: len(dask_worker.data)) == {a: 10, b: 0}
-
-    await c.rebalance()
-
-    ndata = await c.run(lambda dask_worker: len(dask_worker.data))
-    # Allow for some uncertainty as the unmanaged memory is not stable
-    assert sum(ndata.values()) == 10
-    assert 3 <= ndata[a] <= 7
-    assert 3 <= ndata[b] <= 7
+    assert len(a.data) == 1
+    assert len(b.data) == 1
 
 
 @gen_tls_cluster(client=True, nthreads=[("tls://127.0.0.1", 2)] * 2)

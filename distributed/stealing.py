@@ -1,18 +1,17 @@
-import logging
 from collections import defaultdict, deque
+import logging
 from math import log2
 from time import time
 
-from tlz import topk
 from tornado.ioloop import PeriodicCallback
 
 import dask
-from dask.utils import parse_timedelta
-
 from .comm.addressing import get_address_host
 from .core import CommClosedError
 from .diagnostics.plugin import SchedulerPlugin
-from .utils import log_errors
+from .utils import log_errors, parse_timedelta
+
+from tlz import topk
 
 LATENCY = 10e-3
 
@@ -72,20 +71,20 @@ class WorkStealing(SchedulerPlugin):
     def transition(
         self, key, start, finish, compute_start=None, compute_stop=None, *args, **kwargs
     ):
+        ts = self.scheduler.tasks[key]
         if finish == "processing":
-            ts = self.scheduler.tasks[key]
             self.put_key_in_stealable(ts)
-        elif start == "processing":
-            ts = self.scheduler.tasks[key]
+
+        if start == "processing":
             self.remove_key_from_stealable(ts)
             if finish != "memory":
                 self.in_flight.pop(ts, None)
 
     def put_key_in_stealable(self, ts):
+        ws = ts.processing_on
+        worker = ws.address
         cost_multiplier, level = self.steal_time_ratio(ts)
         if cost_multiplier is not None:
-            ws = ts.processing_on
-            worker = ws.address
             self.stealable_all[level].add(ts)
             self.stealable[worker][level].add(ts)
             self.key_stealable[ts] = (worker, level)
@@ -96,6 +95,7 @@ class WorkStealing(SchedulerPlugin):
             return
 
         worker, level = result
+        self.log(("remove-stealable", ts.key, worker, level))
         try:
             self.stealable[worker][level].remove(ts)
         except KeyError:
@@ -110,6 +110,7 @@ class WorkStealing(SchedulerPlugin):
 
         Returns
         -------
+
         cost_multiplier: The increased cost from moving this task as a factor.
         For example a result of zero implies a task without dependencies.
         level: The location within a stealable list to place this value
@@ -453,4 +454,4 @@ def _can_steal(thief, ts, victim):
     return True
 
 
-fast_tasks = {"split-shuffle"}
+fast_tasks = {"shuffle-split"}

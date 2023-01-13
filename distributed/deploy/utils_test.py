@@ -1,6 +1,6 @@
-import pytest
-
 from ..client import Client
+
+import pytest
 
 
 class ClusterTest:
@@ -17,7 +17,7 @@ class ClusterTest:
 
     @pytest.mark.xfail()
     def test_cores(self):
-        self.client.scheduler_info()
+        info = self.client.scheduler_info()
         assert len(self.client.nthreads()) == 2
 
     def test_submit(self):

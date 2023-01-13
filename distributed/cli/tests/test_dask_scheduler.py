@@ -1,28 +1,28 @@
-import psutil
 import pytest
 
 pytest.importorskip("requests")
 
 import os
+import requests
+import socket
 import shutil
 import sys
 import tempfile
 from time import sleep
 
-import requests
 from click.testing import CliRunner
 
 import distributed
-import distributed.cli.dask_scheduler
-from distributed import Client, Scheduler
-from distributed.compatibility import LINUX
-from distributed.metrics import time
+from distributed import Scheduler, Client
 from distributed.utils import get_ip, get_ip_interface, tmpfile
 from distributed.utils_test import (
+    popen,
     assert_can_connect_from_everywhere_4_6,
     assert_can_connect_locally_4,
-    popen,
 )
+from distributed.utils_test import loop  # noqa: F401
+from distributed.metrics import time
+import distributed.cli.dask_scheduler
 
 
 def test_defaults(loop):
@@ -70,32 +70,30 @@ def test_dashboard(loop):
             if b"dashboard at" in line:
                 dashboard_port = int(line.decode().split(":")[-1].strip())
                 break
-        else:
-            raise Exception("dashboard not found")
 
-        with Client(f"127.0.0.1:{Scheduler.default_port}", loop=loop):
+        with Client("127.0.0.1:%d" % Scheduler.default_port, loop=loop) as c:
             pass
 
         names = ["localhost", "127.0.0.1", get_ip()]
+        if "linux" in sys.platform:
+            names.append(socket.gethostname())
+
         start = time()
         while True:
             try:
                 # All addresses should respond
                 for name in names:
-                    uri = f"http://{name}:{dashboard_port}/status/"
+                    uri = "http://%s:%d/status/" % (name, dashboard_port)
                     response = requests.get(uri)
-                    response.raise_for_status()
+                    assert response.ok
                 break
-            except Exception as e:
-                print(f"Got error on {uri!r}: {e.__class__.__name__}: {e}")
-                elapsed = time() - start
-                if elapsed > 10:
-                    print(f"Timed out after {elapsed:.2f} seconds")
-                    raise
+            except Exception as f:
+                print("got error on %r: %s" % (uri, f))
                 sleep(0.1)
+                assert time() < start + 10
 
     with pytest.raises(Exception):
-        requests.get(f"http://127.0.0.1:{dashboard_port}/status/")
+        requests.get("http://127.0.0.1:%d/status/" % dashboard_port)
 
 
 def test_dashboard_non_standard_ports(loop):
@@ -120,7 +118,9 @@ def test_dashboard_non_standard_ports(loop):
         requests.get("http://localhost:4832/status/")
 
 
-@pytest.mark.skipif(not LINUX, reason="Need 127.0.0.2 to mean localhost")
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Need 127.0.0.2 to mean localhost"
+)
 def test_dashboard_whitelist(loop):
     pytest.importorskip("bokeh")
     with pytest.raises(Exception):
@@ -143,7 +143,19 @@ def test_dashboard_whitelist(loop):
                 assert time() < start + 20
 
 
+def test_multiple_workers(loop):
+    with popen(["dask-scheduler", "--no-dashboard"]) as s:
+        with popen(["dask-worker", "localhost:8786", "--no-dashboard"]) as a:
+            with popen(["dask-worker", "localhost:8786", "--no-dashboard"]) as b:
+                with Client("127.0.0.1:%d" % Scheduler.default_port, loop=loop) as c:
+                    start = time()
+                    while len(c.nthreads()) < 2:
+                        sleep(0.1)
+                        assert time() < start + 10
+
+
 def test_interface(loop):
+    psutil = pytest.importorskip("psutil")
     if_names = sorted(psutil.net_if_addrs())
     for if_name in if_names:
         try:
@@ -167,24 +179,27 @@ def test_interface(loop):
                 start = time()
                 while not len(c.nthreads()):
                     sleep(0.1)
-                    assert time() - start < 30
+                    assert time() - start < 5
                 info = c.scheduler_info()
                 assert "tcp://127.0.0.1" in info["address"]
                 assert all("127.0.0.1" == d["host"] for d in info["workers"].values())
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 7), reason="Intermittent failure on old Python version"
+)
 def test_pid_file(loop):
     def check_pidfile(proc, pidfile):
         start = time()
         while not os.path.exists(pidfile):
             sleep(0.01)
-            assert time() < start + 30
+            assert time() < start + 5
 
         text = False
         start = time()
         while not text:
             sleep(0.01)
-            assert time() < start + 30
+            assert time() < start + 5
             with open(pidfile) as f:
                 text = f.read()
         pid = int(text)
@@ -399,12 +414,14 @@ def test_version_option():
 def test_idle_timeout(loop):
     start = time()
     runner = CliRunner()
-    runner.invoke(distributed.cli.dask_scheduler.main, ["--idle-timeout", "1s"])
+    result = runner.invoke(
+        distributed.cli.dask_scheduler.main, ["--idle-timeout", "1s"]
+    )
     stop = time()
     assert 1 < stop - start < 10
 
 
-def test_multiple_workers_2(loop):
+def test_multiple_workers(loop):
     text = """
 def dask_setup(worker):
     worker.foo = 'setup'
@@ -427,14 +444,3 @@ def dask_setup(worker):
                 assert foo == "setup"
                 [foo] = c.run(lambda dask_worker: dask_worker.foo, nanny=True).values()
                 assert foo == "setup"
-
-
-def test_multiple_workers(loop):
-    with popen(["dask-scheduler", "--no-dashboard"]) as s:
-        with popen(["dask-worker", "localhost:8786", "--no-dashboard"]) as a:
-            with popen(["dask-worker", "localhost:8786", "--no-dashboard"]) as b:
-                with Client("127.0.0.1:%d" % Scheduler.default_port, loop=loop) as c:
-                    start = time()
-                    while len(c.nthreads()) < 2:
-                        sleep(0.1)
-                        assert time() < start + 10

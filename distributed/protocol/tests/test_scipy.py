@@ -1,5 +1,4 @@
 import pytest
-
 from distributed.protocol import deserialize, serialize
 
 numpy = pytest.importorskip("numpy")

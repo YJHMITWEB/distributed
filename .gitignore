@@ -10,10 +10,8 @@ docs/build
 continuous_integration/hdfs-initialized
 .DS_Store
 .cache
-.coverage
 *.lock
 .#*
-.eggs/
 .idea/
 .vscode/
 .pytest_cache/

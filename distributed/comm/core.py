@@ -1,21 +1,21 @@
+from abc import ABC, abstractmethod, abstractproperty
 import asyncio
+from contextlib import suppress
 import inspect
 import logging
 import random
 import sys
 import weakref
-from abc import ABC, abstractmethod, abstractproperty
-from contextlib import suppress
 
 import dask
-from dask.utils import parse_timedelta
 
 from ..metrics import time
-from ..protocol import pickle
-from ..protocol.compression import get_default_compression
-from ..utils import TimeoutError
+from ..utils import parse_timedelta, TimeoutError
 from . import registry
 from .addressing import parse_address
+from ..protocol.compression import get_default_compression
+from ..protocol import pickle
+
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class Comm(ABC):
 
         Parameters
         ----------
-        msg
+        msg :
         on_error : Optional[str]
             The behavior when serialization fails. See
             ``distributed.protocol.core.dumps`` for valid values.
@@ -157,9 +157,9 @@ class Comm(ABC):
     def __repr__(self):
         clsname = self.__class__.__name__
         if self.closed():
-            return f"<closed {clsname}>"
+            return "<closed %s>" % (clsname,)
         else:
-            return "<{} {} local={} remote={}>".format(
+            return "<%s %s local=%s remote=%s>" % (
                 clsname,
                 self.name or "",
                 self.local_address,
@@ -220,7 +220,7 @@ class Listener(ABC):
             # Timeout is to ensure that we'll terminate connections eventually.
             # Connector side will employ smaller timeouts and we should only
             # reach this if the comm is dead anyhow.
-            await asyncio.wait_for(comm.write(local_info), timeout=timeout)
+            write = await asyncio.wait_for(comm.write(local_info), timeout=timeout)
             handshake = await asyncio.wait_for(comm.read(), timeout=timeout)
             # This would be better, but connections leak if worker is closed quickly
             # write, handshake = await asyncio.gather(comm.write(local_info), comm.read())
@@ -302,12 +302,10 @@ async def connect(
             upper_cap = min(time_left(), backoff_base * (2 ** attempt))
             backoff = random.uniform(0, upper_cap)
             attempt += 1
-            logger.debug(
-                "Could not connect to %s, waiting for %s before retrying", loc, backoff
-            )
+            logger.debug("Could not connect, waiting for %s before retrying", backoff)
             await asyncio.sleep(backoff)
     else:
-        raise OSError(
+        raise IOError(
             f"Timed out trying to connect to {addr} after {timeout} s"
         ) from active_exception
 
@@ -323,7 +321,7 @@ async def connect(
     except Exception as exc:
         with suppress(Exception):
             await comm.close()
-        raise OSError(
+        raise IOError(
             f"Timed out during handshake while connecting to {addr} after {timeout} s"
         ) from exc
 

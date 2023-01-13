@@ -1,17 +1,20 @@
 import atexit
-import gc
 import logging
+import gc
 import os
 import re
 import sys
 import warnings
 
 import click
+import dask
+
 from tornado.ioloop import IOLoop
 
 from distributed import Scheduler
-from distributed.cli.utils import check_python_3, install_signal_handlers
 from distributed.preloading import validate_preload_argv
+from distributed.cli.utils import check_python_3, install_signal_handlers
+from distributed.utils import deserialize_for_cli
 from distributed.proctitle import (
     enable_proctitle_on_children,
     enable_proctitle_on_current,
@@ -33,7 +36,7 @@ pem_file_option_type = click.Path(exists=True, resolve_path=True)
     help="Preferred network interface like 'eth0' or 'ib0'",
 )
 @click.option(
-    "--protocol", type=str, default=None, help="Protocol like tcp, tls, or ucx"
+    "--protocol", type=str, default=None, help="Protocol like tcp, tls, ucx, or ucr"
 )
 @click.option(
     "--tls-ca-file",
@@ -103,6 +106,7 @@ pem_file_option_type = click.Path(exists=True, resolve_path=True)
     type=str,
     multiple=True,
     is_eager=True,
+    default="",
     help="Module that should be loaded by the scheduler process  "
     'like "foo.bar" or "/path/to/foo.py".',
 )
@@ -130,7 +134,7 @@ def main(
     tls_cert,
     tls_key,
     dashboard_address,
-    **kwargs,
+    **kwargs
 ):
     g0, g1, g2 = gc.get_threshold()  # https://github.com/dask/distributed/issues/1653
     gc.set_threshold(g0 * 3, g1 * 3, g2 * 3)
@@ -163,6 +167,10 @@ def main(
         if v is not None
     }
 
+    if "DASK_INTERNAL_INHERIT_CONFIG" in os.environ:
+        config = deserialize_for_cli(os.environ["DASK_INTERNAL_INHERIT_CONFIG"])
+        dask.config.update(dask.config.global_config, config)
+
     if not host and (tls_ca_file or tls_cert or tls_key):
         host = "tls://"
 
@@ -194,7 +202,7 @@ def main(
         dashboard=dashboard,
         dashboard_address=dashboard_address,
         http_prefix=dashboard_prefix,
-        **kwargs,
+        **kwargs
     )
     logger.info("-" * 47)
 

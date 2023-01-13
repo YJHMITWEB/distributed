@@ -1,13 +1,14 @@
 import asyncio
+from collections import defaultdict
 import logging
 import uuid
-from collections import defaultdict
 
-from dask.utils import parse_timedelta, stringify
+from dask.utils import stringify
 
-from .client import Client, Future
+from .client import Future, Client
 from .utils import sync, thread_state
-from .worker import get_client, get_worker
+from .worker import get_client
+from .utils import parse_timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class QueueExtension:
         self.scheduler.extensions["queues"] = self
 
     def create(self, comm=None, name=None, client=None, maxsize=0):
-        logger.debug(f"Queue name: {name}")
+        logger.debug("Queue name: {}".format(name))
         if name not in self.queues:
             self.queues[name] = asyncio.Queue(maxsize=maxsize)
             self.client_refcount[name] = 1
@@ -85,7 +86,7 @@ class QueueExtension:
 
     async def get(self, comm=None, name=None, client=None, timeout=None, batch=False):
         def process(record):
-            """Add task status if known"""
+            """ Add task status if known """
             if record["type"] == "Future":
                 record = record.copy()
                 key = record["value"]
@@ -149,8 +150,8 @@ class Queue:
         Name used by other clients and the scheduler to identify the queue. If
         not given, a random name will be generated.
     client: Client (optional)
-        Client used for communication with the scheduler.
-        If not given, the default global client will be used.
+        Client used for communication with the scheduler. Defaults to the
+        value of ``Client.current()``.
     maxsize: int (optional)
         Number of items allowed in the queue. If 0 (the default), the queue
         size is unbounded.
@@ -169,11 +170,7 @@ class Queue:
     """
 
     def __init__(self, name=None, client=None, maxsize=0):
-        try:
-            self.client = client or Client.current()
-        except ValueError:
-            # Initialise new client
-            self.client = get_worker().client
+        self.client = client or Client.current()
         self.name = name or "queue-" + uuid.uuid4().hex
         self._event_started = asyncio.Event()
         if self.client.asynchronous or getattr(
@@ -218,7 +215,7 @@ class Queue:
 
         Parameters
         ----------
-        timeout : number or string or timedelta, optional
+        timeout: number or string or timedelta, optional
             Time in seconds to wait before timing out.
             Instead of number of seconds, it is also possible to specify
             a timedelta in string format, e.g. "200ms".
@@ -231,11 +228,11 @@ class Queue:
 
         Parameters
         ----------
-        timeout : number or string or timedelta, optional
+        timeout: number or string or timedelta, optional
             Time in seconds to wait before timing out.
             Instead of number of seconds, it is also possible to specify
             a timedelta in string format, e.g. "200ms".
-        batch : boolean, int (optional)
+        batch: boolean, int (optional)
             If True then return all elements currently waiting in the queue.
             If an integer than return that many elements from the queue
             If False (default) then return one item at a time
@@ -244,7 +241,7 @@ class Queue:
         return self.client.sync(self._get, timeout=timeout, batch=batch, **kwargs)
 
     def qsize(self, **kwargs):
-        """Current number of elements in the queue"""
+        """ Current number of elements in the queue """
         return self.client.sync(self._qsize, **kwargs)
 
     async def _get(self, timeout=None, batch=False):

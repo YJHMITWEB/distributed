@@ -1,14 +1,12 @@
-from time import sleep
-
 import pytest
+from time import sleep
 
 import dask
 from dask.utils import format_bytes
-
 from distributed import Client
-from distributed.comm.ucx import _scrub_ucx_config
+from distributed.utils_test import gen_test, loop, inc, cleanup, popen  # noqa: 401
 from distributed.utils import get_ip
-from distributed.utils_test import popen
+from distributed.comm.ucx import _scrub_ucx_config
 
 try:
     HOST = get_ip()
@@ -76,7 +74,7 @@ def test_ucx_config_w_env_var(cleanup, loop, monkeypatch):
     dask.config.refresh()
 
     port = "13339"
-    sched_addr = f"ucx://{HOST}:{port}"
+    sched_addr = "ucx://%s:%s" % (HOST, port)
 
     with popen(
         ["dask-scheduler", "--no-dashboard", "--protocol", "ucx", "--port", port]

@@ -1,9 +1,9 @@
 import asyncio
 import operator
 
-from distributed import wait
-from distributed.diagnostics import GraphLayout
 from distributed.utils_test import gen_cluster, inc
+from distributed.diagnostics import GraphLayout
+from distributed import wait
 
 
 @gen_cluster(client=True)

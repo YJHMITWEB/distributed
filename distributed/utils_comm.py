@@ -1,15 +1,14 @@
 import asyncio
-import logging
-import random
 from collections import defaultdict
 from functools import partial
 from itertools import cycle
+import logging
+import random
 
-from tlz import concat, drop, groupby, merge
-
-import dask.config
 from dask.optimization import SubgraphCallable
+import dask.config
 from dask.utils import parse_timedelta, stringify
+from tlz import merge, concat, groupby, drop
 
 from .core import rpc
 from .utils import All
@@ -77,7 +76,7 @@ async def gather_from_workers(who_has, rpc, close=True, serializers=None, who=No
             for worker, c in coroutines.items():
                 try:
                     r = await c
-                except OSError:
+                except EnvironmentError:
                     missing_workers.add(worker)
                 except ValueError as e:
                     logger.info(
@@ -112,7 +111,7 @@ class WrappedKey:
         self.key = key
 
     def __repr__(self):
-        return f"{type(self).__name__}('{self.key}')"
+        return "%s('%s')" % (type(self).__name__, self.key)
 
 
 _round_robin_counter = [0]
@@ -250,9 +249,9 @@ def pack_data(o, d, key_types=object):
 
     Parameters
     ----------
-    o
+    o:
         core data structures containing literals and keys
-    d : dict
+    d: dict
         mapping of keys to data
 
     Examples
@@ -285,9 +284,9 @@ def subs_multiple(o, d):
 
     Parameters
     ----------
-    o
+    o:
         Core data structures containing literals and keys
-    d : dict
+    d: dict
         Mapping of keys to values
 
     Examples

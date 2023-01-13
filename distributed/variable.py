@@ -1,22 +1,21 @@
 import asyncio
-import logging
-import uuid
 from collections import defaultdict
 from contextlib import suppress
+import logging
+import uuid
 
 from tlz import merge
 
-from dask.utils import parse_timedelta, stringify
-
-from .client import Client, Future
-from .utils import TimeoutError, log_errors
-from .worker import get_client, get_worker
+from dask.utils import stringify
+from .client import Future, Client
+from .utils import log_errors, TimeoutError, parse_timedelta
+from .worker import get_client
 
 logger = logging.getLogger(__name__)
 
 
 class VariableExtension:
-    """An extension for the scheduler to manage Variables
+    """An extension for the scheduler to manage queues
 
     This adds the following routes to the scheduler
 
@@ -90,7 +89,8 @@ class VariableExtension:
 
                 await asyncio.wait_for(_(), timeout=left)
             finally:
-                self.started.release()
+                with suppress(RuntimeError):  # Python 3.6 loses lock on finally clause
+                    self.started.release()
 
         record = self.variables[name]
         if record["type"] == "Future":
@@ -145,8 +145,8 @@ class Variable:
         Name used by other clients and the scheduler to identify the variable.
         If not given, a random name will be generated.
     client: Client (optional)
-        Client used for communication with the scheduler.
-        If not given, the default global client will be used.
+        Client used for communication with the scheduler. Defaults to the
+        value of ``Client.current()``.
 
     Examples
     --------
@@ -165,11 +165,7 @@ class Variable:
     """
 
     def __init__(self, name=None, client=None, maxsize=0):
-        try:
-            self.client = client or Client.current()
-        except ValueError:
-            # Initialise new client
-            self.client = get_worker().client
+        self.client = client or Client.current()
         self.name = name or "variable-" + uuid.uuid4().hex
 
     async def _set(self, value):
@@ -185,7 +181,7 @@ class Variable:
 
         Parameters
         ----------
-        value : Future or object
+        value: Future or object
             Must be either a Future or a msgpack-encodable value
         """
         return self.client.sync(self._set, value, **kwargs)
@@ -215,7 +211,7 @@ class Variable:
 
         Parameters
         ----------
-        timeout : number or string or timedelta, optional
+        timeout: number or string or timedelta, optional
             Time in seconds to wait before timing out.
             Instead of number of seconds, it is also possible to specify
             a timedelta in string format, e.g. "200ms".
